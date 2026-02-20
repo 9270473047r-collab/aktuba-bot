@@ -151,7 +151,8 @@ async def _pdf_milk(location_title: str, location_code: str, report_date_iso: st
         return None
     data = json.loads(row["data_json"])
     # всем пользователям отправляем "public" (без закрытых полей)
-    return build_milk_summary_pdf_bytes(location_title, data, mode="public", density=1.03)
+    prices = await db.get_milk_prices(location_code)
+    return build_milk_summary_pdf_bytes(location_title, data, mode="public", density=1.03, prices=prices)
 
 
 async def _pdf_vet_0_3(location_title: str, report_date_iso: str) -> Optional[bytes]:

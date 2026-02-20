@@ -29,6 +29,7 @@ router = Router()
 class RegV2(StatesGroup):
     full_name = State()
     phone = State()
+    top_department = State()
     department = State()
     block = State()
     role_pick = State()
@@ -43,11 +44,35 @@ def _depts() -> List[str]:
     return list(ORG_STRUCTURE.keys())
 
 
-def _dept_kb(prefix: str = "regv2:ud:") -> InlineKeyboardMarkup:
+TOP_DEPARTMENTS = [
+    "Отдел животноводства",
+    "ЖК Актюба",
+    "Карамалы",
+    "Шереметьево",
+    "Бирючевка",
+]
+
+
+def _top_dept_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text=d, callback_data=f"regv2:top:{i}")]
+        for i, d in enumerate(TOP_DEPARTMENTS)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _zhk_depts() -> List[str]:
+    return [d for d in _depts() if d != "Отдел животноводства"]
+
+
+def _dept_kb(prefix: str = "regv2:ud:", include_back_to_top: bool = False) -> InlineKeyboardMarkup:
+    dept_list = _zhk_depts() if prefix == "regv2:ud:" else _depts()
     buttons = [
         [InlineKeyboardButton(text=d, callback_data=f"{prefix}{i}")]
-        for i, d in enumerate(_depts())
+        for i, d in enumerate(dept_list)
     ]
+    if include_back_to_top:
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="regv2:back:top")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -216,24 +241,52 @@ async def reg_phone(message: types.Message, state: FSMContext):
 
     await state.update_data(phone=phone)
 
-    # дальше — выбор отдела
+    # дальше — первый выбор подразделения
     sent = await message.answer(
-        "Выберите <b>отдел</b>:",
+        "Выберите подразделение:",
         reply_markup=ReplyKeyboardRemove(),
     )
     await state.update_data(last_bot_message_id=sent.message_id)
 
     await message.answer(
-        "Список отделов:",
-        reply_markup=_dept_kb(),
+        "Первый выбор:",
+        reply_markup=_top_dept_kb(),
     )
-    await state.set_state(RegV2.department)
+    await state.set_state(RegV2.top_department)
+
+
+@router.callback_query(RegV2.top_department, F.data.startswith("regv2:top:"))
+async def reg_choose_top_department(callback: types.CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[-1])
+    if idx < 0 or idx >= len(TOP_DEPARTMENTS):
+        await callback.answer("Подразделение не найдено", show_alert=True)
+        return
+
+    top_dept = TOP_DEPARTMENTS[idx]
+
+    if top_dept == "ЖК Актюба":
+        await callback.message.edit_text(
+            "Подразделение: <b>ЖК Актюба</b>\n\nВыберите отдел:",
+            reply_markup=_dept_kb(include_back_to_top=True),
+            parse_mode="HTML",
+        )
+        await state.set_state(RegV2.department)
+        await callback.answer()
+        return
+
+    await state.update_data(department=top_dept, block=None)
+    await callback.message.edit_text(
+        f"Подразделение: <b>{top_dept}</b>\n\nВведите вашу должность текстом:",
+        parse_mode="HTML",
+    )
+    await state.set_state(RegV2.role_custom)
+    await callback.answer()
 
 
 @router.callback_query(RegV2.department, F.data.startswith("regv2:ud:"))
 async def reg_choose_dept(callback: types.CallbackQuery, state: FSMContext):
     idx = int(callback.data.split(":")[-1])
-    depts = _depts()
+    depts = _zhk_depts()
     if idx < 0 or idx >= len(depts):
         await callback.answer("Отдел не найден", show_alert=True)
         return
@@ -325,9 +378,20 @@ async def reg_custom_role_text(message: types.Message, state: FSMContext):
     await _finish_registration(message, message.from_user, state)
 
 
+@router.callback_query(F.data == "regv2:back:top", RegV2.department)
+async def back_to_top_departments(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Выберите подразделение:", reply_markup=_top_dept_kb())
+    await state.set_state(RegV2.top_department)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "regv2:back:dept", RegV2.block)
 async def back_to_depts(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Выберите <b>отдел</b>:", reply_markup=_dept_kb(), parse_mode="HTML")
+    await callback.message.edit_text(
+        "Подразделение: <b>ЖК Актюба</b>\n\nВыберите отдел:",
+        reply_markup=_dept_kb(include_back_to_top=True),
+        parse_mode="HTML",
+    )
     await state.set_state(RegV2.department)
     await callback.answer()
 

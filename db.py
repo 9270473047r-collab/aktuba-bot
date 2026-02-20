@@ -10,6 +10,36 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "bot.db")
 
+MILK_PRICE_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "aktuba": {
+        "kantal": 41.0,
+        "chmk": 41.0,
+        "siyfat": 40.0,
+        "tnurs": 40.0,
+        "zai": 26.0,
+        "cafeteria": 40.0,
+        "salary": 40.0,
+    },
+    "karamaly": {
+        "kantal": 41.0,
+        "chmk": 41.0,
+        "siyfat": 40.0,
+        "tnurs": 40.0,
+        "zai": 26.0,
+        "cafeteria": 40.0,
+        "salary": 40.0,
+    },
+    "sheremetyovo": {
+        "kantal": 41.0,
+        "chmk": 41.0,
+        "siyfat": 40.0,
+        "tnurs": 40.0,
+        "zai": 26.0,
+        "cafeteria": 40.0,
+        "salary": 40.0,
+    },
+}
+
 
 class Database:
     def __init__(self) -> None:
@@ -24,6 +54,7 @@ class Database:
 
         await self._create_schema()
         await self._apply_migrations()
+        await self._seed_milk_prices_defaults()
         await self.conn.commit()
         logger.info("✅ Схема актуальна")
 
@@ -200,6 +231,29 @@ class Database:
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_mtp_directory_inv_number ON mtp_directory(inv_number);")
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_mtp_directory_unit_name  ON mtp_directory(unit_name);")
 
+        # MILK PRICES -----------------------------------------------------
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS milk_prices (
+                location    TEXT NOT NULL,
+                counterparty TEXT NOT NULL,
+                price       REAL NOT NULL,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(location, counterparty)
+            );
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS milk_price_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location     TEXT NOT NULL,
+                counterparty TEXT NOT NULL,
+                old_price    REAL,
+                new_price    REAL NOT NULL,
+                changed_by   INTEGER REFERENCES users(user_id),
+                changed_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_milk_price_logs_changed_at ON milk_price_logs(changed_at DESC);")
+
     # ---------- миграции к старым БД ----------
     async def _apply_migrations(self):
         migrations = [
@@ -220,6 +274,9 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_tasks_status   ON tasks(status);",
             "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);",
             "CREATE INDEX IF NOT EXISTS idx_fines_status   ON fines(status);",
+            "CREATE TABLE IF NOT EXISTS milk_prices (location TEXT NOT NULL, counterparty TEXT NOT NULL, price REAL NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(location, counterparty));",
+            "CREATE TABLE IF NOT EXISTS milk_price_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, location TEXT NOT NULL, counterparty TEXT NOT NULL, old_price REAL, new_price REAL NOT NULL, changed_by INTEGER REFERENCES users(user_id), changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
+            "CREATE INDEX IF NOT EXISTS idx_milk_price_logs_changed_at ON milk_price_logs(changed_at DESC);",
         ]
         for sql in migrations:
             try:
@@ -228,6 +285,17 @@ class Database:
                 # пропускаем «duplicate column» и «already exists»
                 if "duplicate" not in str(e).lower() and "exists" not in str(e).lower():
                     logger.warning("⚠️ Миграция не применена:\n%s\n%s", sql, e)
+
+    async def _seed_milk_prices_defaults(self) -> None:
+        for location, items in MILK_PRICE_DEFAULTS.items():
+            for counterparty, price in items.items():
+                await self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO milk_prices (location, counterparty, price, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (location, counterparty, float(price)),
+                )
 
     # ---------- USER QUERIES ----------
     async def get_user(self, user_id: int) -> Optional[Dict]:
@@ -391,6 +459,77 @@ class Database:
             (position, user_id),
         )
         await self.conn.commit()
+
+    # ---------- MILK PRICES ----------
+    async def get_milk_prices(self, location: str) -> Dict[str, float]:
+        base = dict(MILK_PRICE_DEFAULTS.get(location, {}))
+        cur = await self.conn.execute(
+            "SELECT counterparty, price FROM milk_prices WHERE location=?",
+            (location,),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        for r in rows:
+            base[str(r["counterparty"])] = float(r["price"])
+        return base
+
+    async def set_milk_price(
+        self,
+        location: str,
+        counterparty: str,
+        price: float,
+        changed_by: int | None = None,
+    ) -> None:
+        cur = await self.conn.execute(
+            "SELECT price FROM milk_prices WHERE location=? AND counterparty=? LIMIT 1",
+            (location, counterparty),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        old_price = float(row["price"]) if row else None
+        new_price = float(price)
+
+        await self.conn.execute(
+            """
+            INSERT INTO milk_prices (location, counterparty, price, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(location, counterparty) DO UPDATE SET
+                price = excluded.price,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (location, counterparty, new_price),
+        )
+        await self.conn.execute(
+            """
+            INSERT INTO milk_price_logs (location, counterparty, old_price, new_price, changed_by)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (location, counterparty, old_price, new_price, changed_by),
+        )
+        await self.conn.commit()
+
+    async def list_milk_price_logs(self, limit: int = 20) -> List[Dict]:
+        cur = await self.conn.execute(
+            """
+            SELECT
+                l.id,
+                l.location,
+                l.counterparty,
+                l.old_price,
+                l.new_price,
+                l.changed_by,
+                l.changed_at,
+                u.full_name AS changed_by_name
+            FROM milk_price_logs l
+            LEFT JOIN users u ON u.user_id = l.changed_by
+            ORDER BY l.changed_at DESC, l.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        return [dict(r) for r in rows]
 
     # ---------- TASKS ----------
     async def create_task(

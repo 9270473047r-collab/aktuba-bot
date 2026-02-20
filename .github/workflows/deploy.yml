@@ -1,4 +1,4 @@
-﻿name: Deploy Bot
+name: Deploy Bot
 
 on:
   push:
@@ -18,7 +18,9 @@ jobs:
           script: |
             set -e
             cd /root/aktuba_bot
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd -e .env -e .venv -e venv -e bot.db
             /root/aktuba_bot/.venv/bin/pip install -r requirements.txt
             systemctl restart aktuba-bot
             systemctl is-active aktuba-bot
