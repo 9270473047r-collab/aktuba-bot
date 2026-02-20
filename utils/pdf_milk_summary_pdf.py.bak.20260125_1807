@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict
+
+from utils.pdf_common import add_title, new_pdf, section, kv, pdf_bytes
+
+
+MILK_DENSITY_DEFAULT = 1.03  # кг/л
+
+
+def _to_float(x: Any) -> float:
+    try:
+        if x is None:
+            return 0.0
+        return float(str(x).replace(" ", "").replace(",", "."))
+    except Exception:
+        return 0.0
+
+
+def _to_int(x: Any) -> int:
+    try:
+        return int(round(_to_float(x)))
+    except Exception:
+        return 0
+
+
+def fmt_int(x: float | int) -> str:
+    try:
+        return f"{int(round(float(x))):,}".replace(",", " ")
+    except Exception:
+        return "0"
+
+
+def fmt_float(x: float, digits: int = 2) -> str:
+    try:
+        return f"{float(x):.{digits}f}".replace(".", ",")
+    except Exception:
+        return "0,00"
+
+
+def l_to_kg(l: float, density: float) -> float:
+    return float(l) * float(density)
+
+
+def kg_to_l(kg: float, density: float) -> float:
+    d = float(density) if density else MILK_DENSITY_DEFAULT
+    return float(kg) / d
+
+
+def _sales_lines(data: Dict[str, Any], density: float) -> Dict[str, Dict[str, float]]:
+    """
+    Возвращает реализацию по каждому каналу:
+      - кг, л, руб, цена
+    ВНИМАНИЕ:
+      - контрагенты вводятся в кг
+      - столовая и ЗП вводятся в литрах -> пересчитываем в кг
+    """
+    sales: Dict[str, Dict[str, float]] = {}
+
+    # контрагенты (ввод кг)
+    kantal_kg = _to_float(data.get("sale_kantal_kg"))
+    chmk_kg = _to_float(data.get("sale_chmk_kg"))
+    siyfat_kg = _to_float(data.get("sale_siyfat_kg"))
+    tnurs_kg = _to_float(data.get("sale_tnurs_kg"))
+    zai_kg = _to_float(data.get("sale_zai_kg"))
+
+    # исключения (ввод л)
+    cafeteria_l = _to_float(data.get("sale_cafeteria_l"))
+    salary_l = _to_float(data.get("sale_salary_l"))
+    cafeteria_kg = l_to_kg(cafeteria_l, density)
+    salary_kg = l_to_kg(salary_l, density)
+
+    # цены
+    PRICE_KANTAL = 41
+    PRICE_CHMK = 41
+    PRICE_SIYFAT = 40
+    PRICE_TNURS = 40
+    PRICE_ZAI = 26
+    PRICE_CAFE = 40
+    PRICE_SALARY = 40
+
+    def add(name: str, kg: float, price: float):
+        l = kg_to_l(kg, density)
+        rub = kg * price
+        sales[name] = {"kg": float(kg), "l": float(l), "rub": float(rub), "price": float(price)}
+
+    add("ООО «Канталь»", kantal_kg, PRICE_KANTAL)
+    add("ООО «ЧМК»", chmk_kg, PRICE_CHMK)
+    add("ООО «Сыйфатлы Ит»", siyfat_kg, PRICE_SIYFAT)
+    add("ООО «ТН-УРС»", tnurs_kg, PRICE_TNURS)
+    add("ООО «Зай»", zai_kg, PRICE_ZAI)
+
+    add("Столовая", cafeteria_kg, PRICE_CAFE)
+    sales["Столовая"]["input_l"] = float(cafeteria_l)
+
+    add("В счёт ЗП", salary_kg, PRICE_SALARY)
+    sales["В счёт ЗП"]["input_l"] = float(salary_l)
+
+    return sales
+
+
+def _sales_totals(sales: Dict[str, Dict[str, float]]) -> Dict[str, float]:
+    total_kg = sum(v.get("kg", 0.0) for v in sales.values())
+    total_l = sum(v.get("l", 0.0) for v in sales.values())
+    total_rub = sum(v.get("rub", 0.0) for v in sales.values())
+    avg_price = (total_rub / total_kg) if total_kg > 0 else 0.0
+    return {
+        "total_kg": float(total_kg),
+        "total_l": float(total_l),
+        "total_rub": float(total_rub),
+        "avg_price": float(avg_price),
+    }
+
+
+def build_milk_summary_pdf_bytes(
+    location_title: str,
+    data: Dict[str, Any],
+    mode: str,
+    density: float = MILK_DENSITY_DEFAULT,
+) -> bytes:
+    """
+    mode:
+      - admin  -> в PDF НЕ показываем "Факт валовый надой" (по требованию)
+      - public -> ок
+      - group  -> без блока По ДЗ
+    """
+    pdf, font, theme = new_pdf("P")
+
+    date_str = str(data.get("report_date") or datetime.now().strftime("%d.%m.%Y"))
+    subtitle = f"{location_title} | Дата: {date_str} | Сформировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+    add_title(pdf, font, theme, "Сводка по молоку", subtitle)
+
+    # ── Молоко
+    big_kg = _to_float(data.get("big_dz_kg"))
+    small_kg = _to_float(data.get("small_dz_kg"))
+    gross_kg = big_kg + small_kg
+
+    big_l = kg_to_l(big_kg, density)
+    small_l = kg_to_l(small_kg, density)
+    gross_l = kg_to_l(gross_kg, density)
+
+    forage_cows = _to_int(data.get("forage_cows"))
+    milking_cows = _to_int(data.get("milking_cows"))
+
+    prod_forage_kg = (gross_kg / forage_cows) if forage_cows > 0 else 0.0
+    prod_forage_l = (gross_l / forage_cows) if forage_cows > 0 else 0.0
+
+    prod_milking_kg = (gross_kg / milking_cows) if milking_cows > 0 else 0.0
+    prod_milking_l = (gross_l / milking_cows) if milking_cows > 0 else 0.0
+
+    section(pdf, font, theme, "Молоко")
+    kv(pdf, font, "Валовый надой:", f"{fmt_int(gross_l)} л / {fmt_int(gross_kg)} кг")
+
+    if mode != "group":
+        kv(pdf, font, "По ДЗ — Большой:", f"{fmt_int(big_l)} л / {fmt_int(big_kg)} кг")
+        kv(pdf, font, "По ДЗ — Малый:", f"{fmt_int(small_l)} л / {fmt_int(small_kg)} кг")
+
+    # Факт в PDF УБРАН полностью
+
+    section(pdf, font, theme, "Продуктивность")
+    if forage_cows > 0:
+        kv(
+            pdf, font, "На 1 фуражную корову:",
+            f"{fmt_float(prod_forage_l, 2)} л/гол | {fmt_float(prod_forage_kg, 2)} кг/гол (фуражных: {fmt_int(forage_cows)})"
+        )
+    else:
+        kv(pdf, font, "На 1 фуражную корову:", "нет данных (не заполнено количество фуражных коров)")
+
+    if milking_cows > 0:
+        kv(
+            pdf, font, "На 1 дойную корову:",
+            f"{fmt_float(prod_milking_l, 2)} л/гол | {fmt_float(prod_milking_kg, 2)} кг/гол (дойных: {fmt_int(milking_cows)})"
+        )
+    else:
+        kv(pdf, font, "На 1 дойную корову:", "нет данных (не заполнено количество дойных коров)")
+
+    # ── Реализация (детализация)
+    sales = _sales_lines(data, density)
+    totals = _sales_totals(sales)
+
+    section(pdf, font, theme, "Реализация молока (детализация)")
+    for name in [
+        "ООО «Канталь»",
+        "ООО «ЧМК»",
+        "ООО «Сыйфатлы Ит»",
+        "ООО «ТН-УРС»",
+        "ООО «Зай»",
+        "Столовая",
+        "В счёт ЗП",
+    ]:
+        v = sales.get(name, {})
+        kg = float(v.get("kg", 0.0))
+        l = float(v.get("l", 0.0))
+        rub = float(v.get("rub", 0.0))
+        price = float(v.get("price", 0.0))
+
+        if name in ("Столовая", "В счёт ЗП"):
+            input_l = float(v.get("input_l", 0.0))
+            suffix = f" (ввод {fmt_int(input_l)} л)" if input_l > 0 else ""
+            kv(
+                pdf, font, f"{name}:",
+                f"{fmt_int(kg)} кг / {fmt_int(l)} л | {fmt_int(rub)} руб | {fmt_float(price, 2)} руб/кг{suffix}"
+            )
+        else:
+            kv(
+                pdf, font, f"{name}:",
+                f"{fmt_int(kg)} кг / {fmt_int(l)} л | {fmt_int(rub)} руб | {fmt_float(price, 2)} руб/кг"
+            )
+
+    section(pdf, font, theme, "Реализация молока (итоги)")
+    kv(pdf, font, "Всего:", f"{fmt_int(totals['total_kg'])} кг / {fmt_int(totals['total_l'])} л")
+    kv(pdf, font, "На сумму:", f"{fmt_int(totals['total_rub'])} руб")
+    kv(pdf, font, "Средняя цена:", f"{fmt_float(totals['avg_price'], 2)} руб/кг")
+
+    # ── Выпойка / потери
+    milk_calves_total_kg = _to_float(data.get("milk_calves_total_kg"))
+    milk_calves_total_l = kg_to_l(milk_calves_total_kg, density)
+
+    disposal_kg = _to_float(data.get("disposal_kg"))
+    disposal_l = kg_to_l(disposal_kg, density)
+
+    section(pdf, font, theme, "Выпойка и потери")
+    kv(pdf, font, "Выпойка всего:", f"{fmt_int(milk_calves_total_l)} л / {fmt_int(milk_calves_total_kg)} кг")
+    kv(pdf, font, "Утилизация:", f"{fmt_int(disposal_l)} л / {fmt_int(disposal_kg)} кг")
+
+    # ── Качество
+    fat = _to_float(data.get("fat"))
+    protein = _to_float(data.get("protein"))
+
+    section(pdf, font, theme, "Качество")
+    kv(pdf, font, "Жир (%):", fmt_float(fat, 2))
+    kv(pdf, font, "Белок (%):", fmt_float(protein, 2))
+
+    # ── Остатки
+    tank_big_kg = _to_float(data.get("tank_big_kg"))
+    tank_small_kg = _to_float(data.get("tank_small_kg"))
+    tank_big_l = kg_to_l(tank_big_kg, density)
+    tank_small_l = kg_to_l(tank_small_kg, density)
+
+    section(pdf, font, theme, "Остаток (конец суток)")
+    kv(pdf, font, "Большой танк:", f"{fmt_int(tank_big_l)} л / {fmt_int(tank_big_kg)} кг")
+    kv(pdf, font, "Малый танк:", f"{fmt_int(tank_small_l)} л / {fmt_int(tank_small_kg)} кг")
+
+    return pdf_bytes(pdf)
