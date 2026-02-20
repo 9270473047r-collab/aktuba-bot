@@ -10,7 +10,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile
 
 from utils.pdf_milk_summary_pdf import build_milk_summary_pdf_bytes
-from db import db, MILK_PRICE_DEFAULTS
 
 
 router = Router()
@@ -36,26 +35,6 @@ def _parse_ids(raw: str) -> set[int]:
 
 ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", ""))
 FACT_VIEWERS_STATIC = set(ADMIN_IDS) | {FACT_VIEW_EXTRA_ID}
-
-COUNTERPARTY_LABELS = {
-    "kantal": "ООО «Канталь»",
-    "chmk": "ООО «ЧМК»",
-    "siyfat": "ООО «Сыйфатлы Ит»",
-    "tnurs": "ООО «ТН-УРС»",
-    "zai": "ООО «Зай»",
-    "cafeteria": "Столовая",
-    "salary": "В счёт ЗП",
-}
-
-FIELD_TO_COUNTERPARTY = {
-    "sale_kantal_kg": "kantal",
-    "sale_chmk_kg": "chmk",
-    "sale_siyfat_kg": "siyfat",
-    "sale_tnurs_kg": "tnurs",
-    "sale_zai_kg": "zai",
-    "sale_cafeteria_l": "cafeteria",
-    "sale_salary_l": "salary",
-}
 
 
 VIEW_KEYS = {
@@ -236,14 +215,14 @@ STEPS_BASE = [
     ("forage_cows", "Количество <b>фуражных коров</b>, <b>гол</b>:", parse_int, "пример: 3250"),
     ("milking_cows", "Количество <b>дойных коров</b>, <b>гол</b>:", parse_int, "пример: 3100"),
 
-    ("sale_kantal_kg", "Реализация молока <b>ООО «Канталь»</b>, <b>кг</b>:", parse_number, ""),
-    ("sale_chmk_kg", "Реализация молока <b>ООО «ЧМК»</b>, <b>кг</b>:", parse_number, ""),
-    ("sale_siyfat_kg", "Реализация молока <b>ООО «Сыйфатлы Ит»</b>, <b>кг</b>:", parse_number, ""),
-    ("sale_tnurs_kg", "Реализация молока <b>ООО «ТН-УРС»</b>, <b>кг</b>:", parse_number, ""),
-    ("sale_zai_kg", "Реализация молока <b>ООО «Зай»</b>, <b>кг</b>:", parse_number, ""),
+    ("sale_kantal_kg", "Реализация молока <b>ООО «Канталь»</b>, <b>кг</b>:", parse_number, "цена 41 руб/кг"),
+    ("sale_chmk_kg", "Реализация молока <b>ООО «ЧМК»</b>, <b>кг</b>:", parse_number, "цена 41 руб/кг"),
+    ("sale_siyfat_kg", "Реализация молока <b>ООО «Сыйфатлы Ит»</b>, <b>кг</b>:", parse_number, "цена 40 руб/кг"),
+    ("sale_tnurs_kg", "Реализация молока <b>ООО «ТН-УРС»</b>, <b>кг</b>:", parse_number, "цена 40 руб/кг"),
+    ("sale_zai_kg", "Реализация молока <b>ООО «Зай»</b>, <b>кг</b>:", parse_number, "цена 26 руб/кг"),
 
-    ("sale_cafeteria_l", "Реализация молока <b>столовая</b>, <b>л</b>:", parse_number, ""),
-    ("sale_salary_l", "Реализация молока <b>в счёт ЗП</b>, <b>л</b>:", parse_number, ""),
+    ("sale_cafeteria_l", "Реализация молока <b>столовая</b>, <b>л</b>:", parse_number, "цена 40 руб/кг"),
+    ("sale_salary_l", "Реализация молока <b>в счёт ЗП</b>, <b>л</b>:", parse_number, "цена 40 руб/кг"),
 
     ("milk_calves_total_kg", "Молока на выпойку <b>всего</b>, <b>кг</b>:", parse_number, "пример: 2020"),
     ("disposal_kg", "Утилизация, <b>кг</b>:", parse_number, "пример: 455"),
@@ -258,28 +237,13 @@ STEPS_BASE = [
 FACT_STEP = ("actual_gross_kg", "Фактический валовый надой, <b>кг</b>:", parse_number, "виден только админу и 5183512024")
 
 
-async def get_location_prices(location_code: str) -> dict[str, float]:
-    try:
-        return await db.get_milk_prices(location_code)
-    except Exception:
-        return dict(MILK_PRICE_DEFAULTS.get(location_code, {}))
-
-
 async def ask_step(message: types.Message, state: FSMContext):
     data = await state.get_data()
     step_idx = data.get("step_idx", 0)
     loc_title = data.get("location_title", "ЖК")
-    loc_code = data.get("location_code", "aktuba")
     steps = data.get("steps") or STEPS_BASE
 
-    key, q, _, hint = steps[step_idx]
-    if key in FIELD_TO_COUNTERPARTY:
-        cp_code = FIELD_TO_COUNTERPARTY[key]
-        prices = await get_location_prices(loc_code)
-        price = float(prices.get(cp_code, 0.0))
-        cp_title = COUNTERPARTY_LABELS.get(cp_code, cp_code)
-        hint = f"текущая цена {cp_title}: {fmt_float(price, 2)} руб/кг"
-
+    _, q, _, hint = steps[step_idx]
     progress = f"Шаг <b>{step_idx + 1}</b> из <b>{len(steps)}</b>"
 
     await message.answer(
@@ -292,7 +256,7 @@ async def ask_step(message: types.Message, state: FSMContext):
     )
 
 
-def calc_sales_totals(data: dict, prices: dict[str, float]) -> dict:
+def calc_sales_totals(data: dict) -> dict:
     kantal_kg = float(data.get("sale_kantal_kg", 0) or 0)
     chmk_kg = float(data.get("sale_chmk_kg", 0) or 0)
     siyfat_kg = float(data.get("sale_siyfat_kg", 0) or 0)
@@ -309,20 +273,20 @@ def calc_sales_totals(data: dict, prices: dict[str, float]) -> dict:
     total_l = kg_to_l(total_kg)
 
     total_rub = (
-        (kantal_kg * float(prices.get("kantal", 0.0))) +
-        (chmk_kg * float(prices.get("chmk", 0.0))) +
-        (siyfat_kg * float(prices.get("siyfat", 0.0))) +
-        (tnurs_kg * float(prices.get("tnurs", 0.0))) +
-        (cafeteria_kg * float(prices.get("cafeteria", 0.0))) +
-        (salary_kg * float(prices.get("salary", 0.0))) +
-        (zai_kg * float(prices.get("zai", 0.0)))
+        (kantal_kg * 41) +
+        (chmk_kg * 41) +
+        (siyfat_kg * 40) +
+        (tnurs_kg * 40) +
+        (cafeteria_kg * 40) +
+        (salary_kg * 40) +
+        (zai_kg * 26)
     )
 
     avg_price = (total_rub / total_kg) if total_kg > 0 else 0.0
     return {"total_kg": total_kg, "total_l": total_l, "total_rub": total_rub, "avg_price": avg_price}
 
 
-def build_report(location_title: str, data: dict, mode: str, prices: dict[str, float]) -> str:
+def build_report(location_title: str, data: dict, mode: str) -> str:
     date_str = str(data.get("report_date") or datetime.now().strftime("%d.%m.%Y"))
 
     big_kg = float(data.get("big_dz_kg", 0) or 0)
@@ -372,7 +336,7 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
     else:
         prod_lines += "• На 1 дойную: <b>нет данных</b>\n"
 
-    sales = calc_sales_totals(data, prices)
+    sales = calc_sales_totals(data)
     total_sale_kg = sales["total_kg"]
     total_sale_l = sales["total_l"]
     total_sale_rub = sales["total_rub"]
@@ -430,11 +394,10 @@ def _make_pdf_filename(location_code: str, report_date_ddmmyyyy: str, mode: str)
 
 
 async def _send_text_and_pdf(chat, location_title: str, location_code: str, data: dict, mode: str):
-    prices = await get_location_prices(location_code)
-    text = build_report(location_title, data, mode=mode, prices=prices)
+    text = build_report(location_title, data, mode=mode)
     await chat.answer(text, parse_mode="HTML")
 
-    pdf_b = build_milk_summary_pdf_bytes(location_title, data, mode=mode, density=MILK_DENSITY, prices=prices)
+    pdf_b = build_milk_summary_pdf_bytes(location_title, data, mode=mode, density=MILK_DENSITY)
     filename = _make_pdf_filename(location_code, str(data.get("report_date") or ""), mode)
     await chat.answer_document(BufferedInputFile(pdf_b, filename=filename))
 
@@ -567,10 +530,9 @@ async def send_daily_group_milk_summary(bot):
 
     data = json.loads(row["data_json"])
 
-    prices = await get_location_prices("aktuba")
-    text = build_report("ЖК «Актюба»", data, mode="group", prices=prices)
+    text = build_report("ЖК «Актюба»", data, mode="group")
     await bot.send_message(GROUP_CHAT_ID, text, parse_mode="HTML")
 
-    pdf_b = build_milk_summary_pdf_bytes("ЖК «Актюба»", data, mode="group", density=MILK_DENSITY, prices=prices)
+    pdf_b = build_milk_summary_pdf_bytes("ЖК «Актюба»", data, mode="group", density=MILK_DENSITY)
     filename = _make_pdf_filename("aktuba", str(data.get("report_date") or ""), "group")
     await bot.send_document(GROUP_CHAT_ID, document=BufferedInputFile(pdf_b, filename=filename))

@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any, Dict
 
 from utils.pdf_common import add_title, new_pdf, section, table, pdf_bytes
-from db import MILK_PRICE_DEFAULTS
 
 
 MILK_DENSITY_DEFAULT = 1.03  # кг/л
@@ -49,11 +48,7 @@ def kg_to_l(kg: float, density: float) -> float:
     return float(kg) / d
 
 
-def _sales_lines(
-    data: Dict[str, Any],
-    density: float,
-    prices: Dict[str, float] | None = None,
-) -> Dict[str, Dict[str, float]]:
+def _sales_lines(data: Dict[str, Any], density: float) -> Dict[str, Dict[str, float]]:
     sales: Dict[str, Dict[str, float]] = {}
 
     # контрагенты (ввод кг)
@@ -69,14 +64,14 @@ def _sales_lines(
     cafeteria_kg = l_to_kg(cafeteria_l, density)
     salary_kg = l_to_kg(salary_l, density)
 
-    prices = prices or dict(MILK_PRICE_DEFAULTS.get("aktuba", {}))
-    PRICE_KANTAL = float(prices.get("kantal", 0.0))
-    PRICE_CHMK = float(prices.get("chmk", 0.0))
-    PRICE_SIYFAT = float(prices.get("siyfat", 0.0))
-    PRICE_TNURS = float(prices.get("tnurs", 0.0))
-    PRICE_ZAI = float(prices.get("zai", 0.0))
-    PRICE_CAFE = float(prices.get("cafeteria", 0.0))
-    PRICE_SALARY = float(prices.get("salary", 0.0))
+    # цены
+    PRICE_KANTAL = 40
+    PRICE_CHMK = 40
+    PRICE_SIYFAT = 40
+    PRICE_TNURS = 40
+    PRICE_ZAI = 26
+    PRICE_CAFE = 40
+    PRICE_SALARY = 40
 
     def add(name: str, kg: float, price: float, note: str = ""):
         l = kg_to_l(kg, density)
@@ -119,7 +114,6 @@ def build_milk_summary_pdf_bytes(
     data: Dict[str, Any],
     mode: str,
     density: float = MILK_DENSITY_DEFAULT,
-    prices: Dict[str, float] | None = None,
 ) -> bytes:
     """
     mode:
@@ -179,7 +173,7 @@ def build_milk_summary_pdf_bytes(
     table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
 
     # ── Реализация
-    sales = _sales_lines(data, density, prices=prices)
+    sales = _sales_lines(data, density)
     totals = _sales_totals(sales)
 
     section(pdf, font, theme, "Реализация молока (детализация)")

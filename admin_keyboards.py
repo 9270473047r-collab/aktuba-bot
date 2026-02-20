@@ -36,10 +36,6 @@ def get_admin_menu() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="⚙️ Настройки"),
-                KeyboardButton(text="🥛 Изменить цены на молоко"),
-            ],
-            [
-                KeyboardButton(text="📜 Журнал цен молока"),
                 KeyboardButton(text="⬅️ Выйти в главное меню"),
             ],
         ],
