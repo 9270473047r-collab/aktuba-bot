@@ -262,6 +262,52 @@ STEPS_BASE = [
     ("tank_small_kg", "Остаток молока <b>Малый танк</b>, <b>кг</b>:", parse_number, "пример: 671"),
 ]
 
+STEPS_KARAMALY = [
+    ("report_date", "Введите дату отчёта <b>ДД.ММ.ГГГГ</b> (или <b>0</b> = сегодня):", parse_date_ddmmyyyy, "пример: 31.12.2025"),
+
+    ("big_dz_kg", "Валовый надой, <b>кг</b>:", parse_number, "пример: 12500"),
+
+    ("forage_cows", "Количество <b>фуражных коров</b>, <b>гол</b>:", parse_int, "пример: 350"),
+    ("milking_cows", "Количество <b>дойных коров</b>, <b>гол</b>:", parse_int, "пример: 310"),
+
+    ("sale_kantal_kg", "Реализация молока <b>ООО «Канталь»</b>, <b>кг</b>:", parse_number, ""),
+    ("sale_chmk_kg", "Реализация молока <b>ООО «ЧМК»</b>, <b>кг</b>:", parse_number, ""),
+    ("sale_zai_kg", "Реализация молока <b>ООО «Зай»</b>, <b>кг</b>:", parse_number, ""),
+
+    ("milk_calves_total_kg", "Молока на выпойку <b>всего</b>, <b>кг</b>:", parse_number, "пример: 200"),
+    ("disposal_kg", "Утилизация, <b>кг</b>:", parse_number, "пример: 50"),
+
+    ("fat", "Жир, <b>%</b>:", parse_percent, "пример: 4,15"),
+    ("protein", "Белок, <b>%</b>:", parse_percent, "пример: 3,61"),
+]
+
+STEPS_SHEREMETYOVO = [
+    ("report_date", "Введите дату отчёта <b>ДД.ММ.ГГГГ</b> (или <b>0</b> = сегодня):", parse_date_ddmmyyyy, "пример: 31.12.2025"),
+
+    ("big_dz_kg", "Валовый надой, <b>кг</b>:", parse_number, "пример: 8500"),
+
+    ("forage_cows", "Количество <b>фуражных коров</b>, <b>гол</b>:", parse_int, "пример: 250"),
+    ("milking_cows", "Количество <b>дойных коров</b>, <b>гол</b>:", parse_int, "пример: 220"),
+
+    ("sale_kantal_kg", "Реализация молока <b>ООО «Канталь»</b>, <b>кг</b>:", parse_number, ""),
+    ("sale_chmk_kg", "Реализация молока <b>ООО «ЧМК»</b>, <b>кг</b>:", parse_number, ""),
+    ("sale_zai_kg", "Реализация молока <b>ООО «Зай»</b>, <b>кг</b>:", parse_number, ""),
+
+    ("sale_cafeteria_l", "Реализация молока <b>столовая</b>, <b>л</b>:", parse_number, ""),
+    ("sale_salary_l", "Реализация молока <b>в счёт ЗП</b>, <b>л</b>:", parse_number, ""),
+
+    ("milk_calves_total_kg", "Молока на выпойку <b>всего</b>, <b>кг</b>:", parse_number, "пример: 150"),
+    ("disposal_kg", "Утилизация, <b>кг</b>:", parse_number, "пример: 30"),
+
+    ("fat", "Жир, <b>%</b>:", parse_percent, "пример: 4,15"),
+    ("protein", "Белок, <b>%</b>:", parse_percent, "пример: 3,61"),
+]
+
+LOCATION_STEPS = {
+    "karamaly": STEPS_KARAMALY,
+    "sheremetyovo": STEPS_SHEREMETYOVO,
+}
+
 FACT_STEP = ("actual_gross_kg", "Фактический валовый надой, <b>кг</b>:", parse_number, "виден только админу и 5183512024")
 
 
@@ -672,15 +718,13 @@ async def start_submit_milk(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.answer("⛔️ Сводку по молоку по ЖК «Актюба» сдаёт только лаборант.")
         return
 
-    include_fact_question = False
-    if loc_code == "aktuba" and callback.from_user.id == LAB_TECH_ID:
-        include_fact_question = True
-    elif await can_view_fact(callback.from_user.id):
-        include_fact_question = True
+    base = LOCATION_STEPS.get(loc_code, STEPS_BASE)
+    steps = list(base)
 
-    steps = list(STEPS_BASE)
-    if include_fact_question:
-        steps.append(FACT_STEP)
+    if loc_code == "aktuba":
+        include_fact = (callback.from_user.id == LAB_TECH_ID or await can_view_fact(callback.from_user.id))
+        if include_fact:
+            steps.append(FACT_STEP)
 
     await state.set_state(MilkWizard.active)
     await state.update_data(
