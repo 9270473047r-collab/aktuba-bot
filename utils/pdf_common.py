@@ -502,6 +502,7 @@ def _table_impl(
     *,
     theme: Optional[Dict[str, Any]] = None,
     header_fill: bool = True,
+    cell_colors: Optional[List[List[Any]]] = None,
 ):
     if not headers:
         return
@@ -582,6 +583,14 @@ def _table_impl(
 
         x = x0
         for i in range(n):
+            cc = None
+            if cell_colors and r_i < len(cell_colors) and cell_colors[r_i] and i < len(cell_colors[r_i]):
+                cc = cell_colors[r_i][i]
+            if cc:
+                pdf.set_text_color(*cc)
+            else:
+                pdf.set_text_color(*t["text"])
+
             pdf.set_xy(x + 1, y + 0.6)
             _multi_cell(
                 pdf,
@@ -597,6 +606,7 @@ def _table_impl(
             )
             x += col_widths[i]
 
+        pdf.set_text_color(*t["text"])
         pdf.set_y(y + row_h)
 
 
@@ -628,6 +638,7 @@ def table(pdf: FPDF, *args, **kwargs):
 
     aligns = kwargs.get("aligns") or kwargs.get("align") or kwargs.get("alignments")
     header_fill = kwargs.get("header_fill", True)
+    cell_colors = kwargs.get("cell_colors")
 
     return _table_impl(
         pdf,
@@ -637,6 +648,7 @@ def table(pdf: FPDF, *args, **kwargs):
         aligns=aligns,
         theme=theme,
         header_fill=header_fill,
+        cell_colors=cell_colors,
     )
 
 

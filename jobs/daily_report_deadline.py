@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -162,12 +162,22 @@ async def _pdf_milk(location_title: str, location_code: str, report_date_iso: st
         return None
     data = json.loads(row["data_json"])
     prices = await db.get_milk_prices(location_code)
-    return build_milk_summary_pdf_bytes(location_title, data, mode="public", density=1.03, prices=prices)
+    prev_data = None
+    try:
+        prev_iso = (datetime.strptime(report_date_iso, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        prev_row = await get_milk_report_by_date(location_code, prev_iso)
+        if prev_row:
+            prev_data = json.loads(prev_row["data_json"])
+    except Exception:
+        pass
+    return build_milk_summary_pdf_bytes(location_title, data, mode="public", density=1.03,
+                                        prices=prices, prev_data=prev_data)
 
 
 async def _pdf_soyuz_agro_milk(report_date_iso: str) -> Optional[bytes]:
     all_data: Dict[str, Dict] = {}
     all_prices: Dict[str, Dict] = {}
+    prev_all_data: Dict[str, Dict] = {}
     has_any = False
     for _, code in SOYUZ_LOCATIONS:
         row = await get_milk_report_by_date(code, report_date_iso)
@@ -177,9 +187,16 @@ async def _pdf_soyuz_agro_milk(report_date_iso: str) -> Optional[bytes]:
         else:
             all_data[code] = {}
         all_prices[code] = await db.get_milk_prices(code)
+        try:
+            prev_iso = (datetime.strptime(report_date_iso, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            prev_row = await get_milk_report_by_date(code, prev_iso)
+            prev_all_data[code] = json.loads(prev_row["data_json"]) if prev_row else {}
+        except Exception:
+            prev_all_data[code] = {}
     if not has_any:
         return None
-    return build_soyuz_agro_milk_pdf_bytes(all_data, all_prices, density=1.03)
+    return build_soyuz_agro_milk_pdf_bytes(all_data, all_prices, density=1.03,
+                                           prev_all_data=prev_all_data or None)
 
 
 async def _pdf_vet_0_3(location_title: str, report_date_iso: str) -> Optional[bytes]:

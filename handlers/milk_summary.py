@@ -2,7 +2,7 @@ import os
 import json
 import re
 import aiosqlite
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from aiogram import Router, types, F
 from aiogram.fsm.state import StatesGroup, State
@@ -470,19 +470,77 @@ def _make_pdf_filename(location_code: str, report_date_ddmmyyyy: str, mode: str)
     return f"milk_{safe_loc}_{safe_date}_{mode}.pdf"
 
 
+async def _get_prev_day_data(location_code: str, report_date_iso: str | None) -> dict | None:
+    if not report_date_iso:
+        return None
+    try:
+        dt = datetime.strptime(report_date_iso, "%Y-%m-%d")
+        prev_iso = (dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        row = await get_milk_report_by_date(location_code, prev_iso)
+        if row:
+            return json.loads(row["data_json"])
+    except Exception:
+        pass
+    return None
+
+
 async def _send_text_and_pdf(chat, location_title: str, location_code: str, data: dict, mode: str):
     prices = await get_location_prices(location_code)
     text = build_report(location_title, data, mode=mode, prices=prices)
     await chat.answer(text, parse_mode="HTML")
 
-    pdf_b = build_milk_summary_pdf_bytes(location_title, data, mode=mode, density=MILK_DENSITY, prices=prices)
-    filename = _make_pdf_filename(location_code, str(data.get("report_date") or ""), mode)
+    report_date = str(data.get("report_date") or "")
+    report_date_iso = None
+    try:
+        report_date_iso = datetime.strptime(report_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+    except Exception:
+        report_date_iso = report_date if "-" in report_date else None
+
+    prev_data = await _get_prev_day_data(location_code, report_date_iso)
+    pdf_b = build_milk_summary_pdf_bytes(location_title, data, mode=mode, density=MILK_DENSITY,
+                                         prices=prices, prev_data=prev_data)
+    filename = _make_pdf_filename(location_code, report_date, mode)
     await chat.answer_document(BufferedInputFile(pdf_b, filename=filename))
+
+
+async def _check_report_exists(table_name: str, location: str, date_iso: str,
+                               extra_col: str | None = None, extra_val: str | None = None) -> bool:
+    try:
+        if extra_col:
+            cur = await db.conn.execute(
+                f"SELECT 1 FROM {table_name} WHERE location=? AND {extra_col}=? AND report_date=? LIMIT 1",
+                (location, extra_val, date_iso),
+            )
+        else:
+            cur = await db.conn.execute(
+                f"SELECT 1 FROM {table_name} WHERE location=? AND report_date=? LIMIT 1",
+                (location, date_iso),
+            )
+        row = await cur.fetchone()
+        await cur.close()
+        return bool(row)
+    except Exception:
+        return False
+
+
+async def _build_report_status(date_iso: str) -> dict[str, dict[str, bool]]:
+    farm_titles = {"aktuba": "ЖК «Актюба»", "karamaly": "Карамалы", "sheremetyovo": "Шереметьево"}
+    status: dict[str, dict[str, bool]] = {}
+    for code, title in farm_titles.items():
+        status[code] = {
+            "milk": await _check_report_exists("milk_reports", code, date_iso),
+            "vet_0_3": await _check_report_exists("vet_reports", title, date_iso, "report_type", "vet_0_3"),
+            "vet_cows": await _check_report_exists("vet_reports", title, date_iso, "report_type", "vet_cows"),
+            "vet_ortho": await _check_report_exists("vet_reports", title, date_iso, "report_type", "vet_ortho"),
+        }
+    return status
 
 
 async def _show_soyuz_agro(message: types.Message, date_iso: str | None):
     all_data: dict[str, dict] = {}
     all_prices: dict[str, dict] = {}
+    prev_all_data: dict[str, dict] = {}
+    actual_date_iso = date_iso
 
     for _, code in SOYUZ_LOCATIONS:
         if date_iso:
@@ -492,8 +550,31 @@ async def _show_soyuz_agro(message: types.Message, date_iso: str | None):
         all_data[code] = json.loads(row["data_json"]) if row else {}
         all_prices[code] = await get_location_prices(code)
 
-    pdf_b = build_soyuz_agro_milk_pdf_bytes(all_data, all_prices, density=MILK_DENSITY)
-    any_date = date_iso or ""
+        if row and not actual_date_iso:
+            actual_date_iso = row["report_date"]
+
+    if actual_date_iso:
+        try:
+            prev_iso = (datetime.strptime(actual_date_iso, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            for _, code in SOYUZ_LOCATIONS:
+                prev_row = await get_milk_report_by_date(code, prev_iso)
+                prev_all_data[code] = json.loads(prev_row["data_json"]) if prev_row else {}
+        except Exception:
+            prev_all_data = {}
+
+    report_status = None
+    if actual_date_iso:
+        try:
+            report_status = await _build_report_status(actual_date_iso)
+        except Exception:
+            pass
+
+    pdf_b = build_soyuz_agro_milk_pdf_bytes(
+        all_data, all_prices, density=MILK_DENSITY,
+        prev_all_data=prev_all_data or None,
+        report_status=report_status,
+    )
+    any_date = actual_date_iso or ""
     for code in ("aktuba", "karamaly", "sheremetyovo"):
         d = all_data.get(code, {})
         if d.get("report_date"):
