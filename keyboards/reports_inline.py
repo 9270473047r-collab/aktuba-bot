@@ -59,14 +59,12 @@ def get_submit_keyboard() -> InlineKeyboardMarkup:
 
 # --- Клавиатура для выбора локации сдачи "Сводки по молоку" ---
 def get_milk_summary_submit_keyboard(
-    include_soyuz_agro: bool = False,
     allowed_location_codes: list[str] | None = None,
 ) -> InlineKeyboardMarkup:
     options = [
         ("ЖК «Актюба»", "milk_submit_aktuba"),
         ("Карамалы", "milk_submit_karamaly"),
         ("Шереметьево", "milk_submit_sheremetyovo"),
-        ("Бирючевка", "milk_submit_biryuchevka"),
     ]
 
     if allowed_location_codes is not None:
@@ -164,7 +162,6 @@ def get_milk_summary_keyboard(
         ("ЖК «Актюба»", "milk_aktuba"),
         ("Карамалы", "milk_karamaly"),
         ("Шереметьево", "milk_sheremetyovo"),
-        ("Бирючевка", "milk_biryuchevka"),
     ]
     if include_soyuz_agro:
         options.append(("🏢 ООО «Союз-Агро»", "milk_soyuz_agro"))

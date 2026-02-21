@@ -63,6 +63,12 @@ FARMS: List[Tuple[str, str]] = [
     ("Бирючевка", "biryuchevka"),
 ]
 
+MILK_FARMS: List[Tuple[str, str]] = [
+    ("ЖК «Актюба»", "aktuba"),
+    ("Карамалы", "karamaly"),
+    ("Шереметьево", "sheremetyovo"),
+]
+
 
 def _today_iso_msk() -> str:
     return datetime.now(MSK).strftime("%Y-%m-%d")
@@ -271,8 +277,7 @@ async def build_daily_pdf_parts(report_date_iso: str) -> List[Tuple[str, bytes]]
     """Собирает список PDF (по одному на каждый имеющийся отчёт) за указанную дату."""
     parts: List[Tuple[str, bytes]] = []
 
-    for farm_title, farm_code in FARMS:
-        # Молоко
+    for farm_title, farm_code in MILK_FARMS:
         try:
             b = await _pdf_milk(farm_title, farm_code, report_date_iso)
             if b:
@@ -280,7 +285,7 @@ async def build_daily_pdf_parts(report_date_iso: str) -> List[Tuple[str, bytes]]
         except Exception:
             logger.exception("milk pdf build failed")
 
-        # Вет
+    for farm_title, farm_code in FARMS:
         try:
             b = await _pdf_vet_0_3(farm_title, report_date_iso)
             if b:
@@ -349,10 +354,12 @@ async def build_missing_reports_message(report_date_iso: str) -> str:
     lines.append(f"🕓 <b>Контроль сдачи сводок</b> (срез на 16:00)\n📅 Дата: <b>{date_h}</b>")
     lines.append("")
 
+    milk_farm_codes = {code for _, code in MILK_FARMS}
+
     for farm_title, farm_code in FARMS:
         missing: List[str] = []
 
-        if not await _exists_milk(farm_code, report_date_iso):
+        if farm_code in milk_farm_codes and not await _exists_milk(farm_code, report_date_iso):
             missing.append("🍼 Сводка по молоку")
 
         if not await _exists_vet(farm_title, "vet_0_3", report_date_iso):

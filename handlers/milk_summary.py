@@ -66,7 +66,6 @@ VIEW_KEYS = {
     "milk_aktuba": ("aktuba", "ЖК «Актюба»"),
     "milk_karamaly": ("karamaly", "Карамалы"),
     "milk_sheremetyovo": ("sheremetyovo", "Шереметьево"),
-    "milk_biryuchevka": ("biryuchevka", "Бирючевка"),
     "milk_soyuz_agro": ("soyuz_agro", "ООО «Союз-Агро»"),
 }
 
@@ -74,12 +73,15 @@ SUBMIT_KEYS = {
     "milk_submit_aktuba": ("aktuba", "ЖК «Актюба»"),
     "milk_submit_karamaly": ("karamaly", "Карамалы"),
     "milk_submit_sheremetyovo": ("sheremetyovo", "Шереметьево"),
-    "milk_submit_biryuchevka": ("biryuchevka", "Бирючевка"),
 }
 
 
 class MilkWizard(StatesGroup):
     active = State()
+
+
+class MilkViewState(StatesGroup):
+    waiting_date = State()
 
 
 def fmt_int(x: float | int) -> str:
@@ -478,69 +480,105 @@ async def _send_text_and_pdf(chat, location_title: str, location_code: str, data
     await chat.answer_document(BufferedInputFile(pdf_b, filename=filename))
 
 
-@router.callback_query(F.data == "milk_soyuz_agro")
-async def view_soyuz_agro_milk(callback: types.CallbackQuery):
+async def _show_soyuz_agro(message: types.Message, date_iso: str | None):
     all_data: dict[str, dict] = {}
     all_prices: dict[str, dict] = {}
-    missing = []
 
-    for col_title, code in SOYUZ_LOCATIONS:
-        row = await get_latest_milk_report(code)
-        if not row:
-            missing.append(col_title)
-            all_data[code] = {}
+    for _, code in SOYUZ_LOCATIONS:
+        if date_iso:
+            row = await get_milk_report_by_date(code, date_iso)
         else:
-            all_data[code] = json.loads(row["data_json"])
+            row = await get_latest_milk_report(code)
+        all_data[code] = json.loads(row["data_json"]) if row else {}
         all_prices[code] = await get_location_prices(code)
 
-    if len(missing) == len(SOYUZ_LOCATIONS):
-        await callback.message.answer(
-            "❗️ Нет данных ни по одному подразделению для формирования сводки Союз-Агро.",
-            parse_mode="HTML",
-        )
-        await callback.answer()
-        return
-
-    if missing:
-        await callback.message.answer(
-            f"⚠️ Нет данных по: {', '.join(missing)}. Сводка будет неполной.",
-            parse_mode="HTML",
-        )
-
     pdf_b = build_soyuz_agro_milk_pdf_bytes(all_data, all_prices, density=MILK_DENSITY)
-    any_date = ""
+    any_date = date_iso or ""
     for code in ("aktuba", "karamaly", "sheremetyovo"):
         d = all_data.get(code, {})
         if d.get("report_date"):
             any_date = str(d["report_date"])
             break
-    filename = _make_pdf_filename("soyuz_agro", any_date or "", "public")
-    await callback.message.answer_document(BufferedInputFile(pdf_b, filename=filename))
+    filename = _make_pdf_filename("soyuz_agro", any_date, "public")
+    await message.answer_document(BufferedInputFile(pdf_b, filename=filename))
+
+
+@router.callback_query(F.data == "milk_soyuz_agro")
+async def view_soyuz_agro_start(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(MilkViewState.waiting_date)
+    await state.update_data(view_loc_code="soyuz_agro", view_loc_title="ООО «Союз-Агро»")
+    await callback.message.answer(
+        "🏢 <b>ООО «Союз-Агро»</b>\n"
+        "Введите дату (ДД.ММ.ГГГГ) или <b>0</b> для последнего отчёта:\n"
+        "<i>Для отмены: отмена</i>",
+        parse_mode="HTML",
+    )
     await callback.answer()
 
 
 @router.callback_query(F.data.in_(list(VIEW_KEYS.keys())))
-async def view_milk_summary(callback: types.CallbackQuery):
+async def view_milk_start(callback: types.CallbackQuery, state: FSMContext):
     key = callback.data
     loc_code, loc_title = VIEW_KEYS[key]
-
     if loc_code == "soyuz_agro":
         return
 
-    row = await get_latest_milk_report(loc_code)
-    if not row:
-        await callback.message.answer(
-            f"❗️ Сводка по молоку для <b>{loc_title}</b> ещё не сдавалась.",
-            parse_mode="HTML"
-        )
-        await callback.answer()
+    await state.set_state(MilkViewState.waiting_date)
+    await state.update_data(view_loc_code=loc_code, view_loc_title=loc_title)
+    await callback.message.answer(
+        f"🍼 <b>{loc_title}</b>\n"
+        f"Введите дату (ДД.ММ.ГГГГ) или <b>0</b> для последнего отчёта:\n"
+        f"<i>Для отмены: отмена</i>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(MilkViewState.waiting_date)
+async def view_milk_date_input(message: types.Message, state: FSMContext):
+    txt = (message.text or "").strip()
+    if txt.lower() in ("отмена", "cancel", "/cancel", "стоп"):
+        await state.clear()
+        await message.answer("Просмотр отменён.")
         return
 
-    data = json.loads(row["data_json"])
-    mode = "admin" if await can_view_fact(callback.from_user.id) else "public"
+    data = await state.get_data()
+    loc_code = data.get("view_loc_code")
+    loc_title = data.get("view_loc_title")
 
-    await _send_text_and_pdf(callback.message, loc_title, loc_code, data, mode=mode)
-    await callback.answer()
+    use_latest = txt in ("0", "последний")
+    date_iso = None
+
+    if not use_latest:
+        try:
+            dt = datetime.strptime(txt, "%d.%m.%Y")
+            date_iso = dt.strftime("%Y-%m-%d")
+        except ValueError:
+            await message.answer("❗️ Неверный формат. Введите дату ДД.ММ.ГГГГ или <b>0</b>:", parse_mode="HTML")
+            return
+
+    await state.clear()
+
+    if loc_code == "soyuz_agro":
+        await _show_soyuz_agro(message, date_iso=date_iso)
+        return
+
+    if use_latest:
+        row = await get_latest_milk_report(loc_code)
+    else:
+        row = await get_milk_report_by_date(loc_code, date_iso)
+
+    if not row:
+        label = f"за {txt}" if not use_latest else "(последний)"
+        await message.answer(
+            f"❗️ Сводка по молоку для <b>{loc_title}</b> {label} не найдена.",
+            parse_mode="HTML",
+        )
+        return
+
+    report_data = json.loads(row["data_json"])
+    mode = "admin" if await can_view_fact(message.from_user.id) else "public"
+    await _send_text_and_pdf(message, loc_title, loc_code, report_data, mode=mode)
 
 
 @router.callback_query(F.data.in_(list(SUBMIT_KEYS.keys())))

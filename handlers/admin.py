@@ -1,16 +1,19 @@
+from datetime import datetime, date, timedelta
+
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 
-from keyboards import get_main_menu                # главное меню (у всех)
-from admin_keyboards import (                       # все админ-клавиатуры
+from keyboards import get_main_menu
+from admin_keyboards import (
     get_admin_menu,
     get_user_management_keyboard,
 )
-from config import ADMIN_IDS                     # список ID админов
+from config import ADMIN_IDS
 from db import db
 from utils.cleaner import auto_clean_chat
+from utils.pdf_common import new_pdf, add_title, section, table, pdf_bytes
 
 router = Router()
 
@@ -273,4 +276,159 @@ async def milk_prices_set_value(message: types.Message, state: FSMContext):
         reply_markup=_milk_counterparties_kb(location_code, prices),
         parse_mode="HTML",
     )
+
+
+# ───────────────────── Контроль отчётов ─────────────────────
+
+CONTROL_FARMS = [
+    ("ЖК", "aktuba"),
+    ("Карамалы", "karamaly"),
+    ("Шереметьево", "sheremetyovo"),
+]
+
+CONTROL_ALL_FARMS = [
+    ("ЖК", "aktuba"),
+    ("Карамалы", "karamaly"),
+    ("Шереметьево", "sheremetyovo"),
+    ("Бирючевка", "biryuchevka"),
+]
+
+
+async def _check_exists(table_name: str, location: str, report_date_iso: str,
+                         extra_col: str | None = None, extra_val: str | None = None) -> bool:
+    try:
+        if extra_col:
+            cur = await db.conn.execute(
+                f"SELECT 1 FROM {table_name} WHERE location=? AND {extra_col}=? AND report_date=? LIMIT 1",
+                (location, extra_val, report_date_iso),
+            )
+        else:
+            cur = await db.conn.execute(
+                f"SELECT 1 FROM {table_name} WHERE location=? AND report_date=? LIMIT 1",
+                (location, report_date_iso),
+            )
+        row = await cur.fetchone()
+        await cur.close()
+        return bool(row)
+    except Exception:
+        return False
+
+
+async def _build_control_pdf() -> bytes:
+    year_start = date(date.today().year, 1, 1)
+    today = date.today()
+
+    all_dates = []
+    d = year_start
+    while d <= today:
+        all_dates.append(d)
+        d += timedelta(days=1)
+
+    pdf, font, theme = new_pdf("L")
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    add_title(pdf, font, theme,
+              "Контроль сдачи отчётов",
+              f"С 01.01.{today.year} по {today.strftime('%d.%m.%Y')} | Сформировано: {now_str}")
+
+    # ── Молоко
+    section(pdf, font, theme, "Сводка по молоку")
+    headers = ["Дата"] + [t for t, _ in CONTROL_FARMS]
+    widths = [30] + [40] * len(CONTROL_FARMS)
+    aligns = ["L"] + ["C"] * len(CONTROL_FARMS)
+    rows = []
+    for d in all_dates:
+        d_iso = d.strftime("%Y-%m-%d")
+        row = [d.strftime("%d.%m")]
+        any_missing = False
+        for _, code in CONTROL_FARMS:
+            ok = await _check_exists("milk_reports", code, d_iso)
+            row.append("OK" if ok else "-")
+            if not ok:
+                any_missing = True
+        if any_missing:
+            rows.append(row)
+    if not rows:
+        rows.append(["Все отчёты сданы"] + [""] * len(CONTROL_FARMS))
+    table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
+
+    # ── Ветеринария 0-3
+    section(pdf, font, theme, "Ветеринария: 0-3 мес")
+    vet_headers = ["Дата"] + [t for t, _ in CONTROL_ALL_FARMS]
+    vet_widths = [30] + [35] * len(CONTROL_ALL_FARMS)
+    vet_aligns = ["L"] + ["C"] * len(CONTROL_ALL_FARMS)
+    rows = []
+    for d in all_dates:
+        d_iso = d.strftime("%Y-%m-%d")
+        row = [d.strftime("%d.%m")]
+        any_missing = False
+        for title, code in CONTROL_ALL_FARMS:
+            farm_title_full = {"aktuba": "ЖК «Актюба»", "karamaly": "Карамалы",
+                               "sheremetyovo": "Шереметьево", "biryuchevka": "Бирючевка"}.get(code, code)
+            ok = await _check_exists("vet_reports", farm_title_full, d_iso,
+                                     extra_col="report_type", extra_val="vet_0_3")
+            row.append("OK" if ok else "-")
+            if not ok:
+                any_missing = True
+        if any_missing:
+            rows.append(row)
+    if not rows:
+        rows.append(["Все отчёты сданы"] + [""] * len(CONTROL_ALL_FARMS))
+    table(pdf, font, theme, headers=vet_headers, rows=rows, widths=vet_widths, aligns=vet_aligns)
+
+    # ── Ветеринария: коровы
+    section(pdf, font, theme, "Ветеринария: коровы")
+    rows = []
+    for d in all_dates:
+        d_iso = d.strftime("%Y-%m-%d")
+        row = [d.strftime("%d.%m")]
+        any_missing = False
+        for title, code in CONTROL_ALL_FARMS:
+            farm_title_full = {"aktuba": "ЖК «Актюба»", "karamaly": "Карамалы",
+                               "sheremetyovo": "Шереметьево", "biryuchevka": "Бирючевка"}.get(code, code)
+            ok = await _check_exists("vet_reports", farm_title_full, d_iso,
+                                     extra_col="report_type", extra_val="vet_cows")
+            row.append("OK" if ok else "-")
+            if not ok:
+                any_missing = True
+        if any_missing:
+            rows.append(row)
+    if not rows:
+        rows.append(["Все отчёты сданы"] + [""] * len(CONTROL_ALL_FARMS))
+    table(pdf, font, theme, headers=vet_headers, rows=rows, widths=vet_widths, aligns=vet_aligns)
+
+    # ── Ветеринария: ортопедия
+    section(pdf, font, theme, "Ветеринария: ортопедия")
+    rows = []
+    for d in all_dates:
+        d_iso = d.strftime("%Y-%m-%d")
+        row = [d.strftime("%d.%m")]
+        any_missing = False
+        for title, code in CONTROL_ALL_FARMS:
+            farm_title_full = {"aktuba": "ЖК «Актюба»", "karamaly": "Карамалы",
+                               "sheremetyovo": "Шереметьево", "biryuchevka": "Бирючевка"}.get(code, code)
+            ok = await _check_exists("vet_reports", farm_title_full, d_iso,
+                                     extra_col="report_type", extra_val="vet_ortho")
+            row.append("OK" if ok else "-")
+            if not ok:
+                any_missing = True
+        if any_missing:
+            rows.append(row)
+    if not rows:
+        rows.append(["Все отчёты сданы"] + [""] * len(CONTROL_ALL_FARMS))
+    table(pdf, font, theme, headers=vet_headers, rows=rows, widths=vet_widths, aligns=vet_aligns)
+
+    return pdf_bytes(pdf)
+
+
+@router.message(F.text == "📋 Контроль отчётов")
+@auto_clean_chat()
+async def report_control(message: types.Message, state: FSMContext):
+    if not user_is_admin(message.from_user.id):
+        await message.answer("⛔ Доступ запрещён!")
+        return
+
+    await message.answer("Формирую PDF контроля отчётов... Подождите.")
+    pdf_b = await _build_control_pdf()
+    filename = f"control_{date.today().strftime('%Y%m%d')}.pdf"
+    await message.answer_document(BufferedInputFile(pdf_b, filename=filename))
 

@@ -40,8 +40,9 @@ def get_admin_menu() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="📜 Журнал цен молока"),
-                KeyboardButton(text="⬅️ Выйти в главное меню"),
+                KeyboardButton(text="📋 Контроль отчётов"),
             ],
+            [KeyboardButton(text="⬅️ Выйти в главное меню")],
         ],
         resize_keyboard=True,
     )
