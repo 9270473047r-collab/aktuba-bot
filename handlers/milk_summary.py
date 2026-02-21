@@ -9,7 +9,11 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile
 
-from utils.pdf_milk_summary_pdf import build_milk_summary_pdf_bytes
+from utils.pdf_milk_summary_pdf import (
+    build_milk_summary_pdf_bytes,
+    build_soyuz_agro_milk_pdf_bytes,
+    SOYUZ_LOCATIONS,
+)
 from db import db, MILK_PRICE_DEFAULTS
 
 
@@ -62,6 +66,7 @@ VIEW_KEYS = {
     "milk_aktuba": ("aktuba", "ЖК «Актюба»"),
     "milk_karamaly": ("karamaly", "Карамалы"),
     "milk_sheremetyovo": ("sheremetyovo", "Шереметьево"),
+    "milk_biryuchevka": ("biryuchevka", "Бирючевка"),
     "milk_soyuz_agro": ("soyuz_agro", "ООО «Союз-Агро»"),
 }
 
@@ -69,7 +74,7 @@ SUBMIT_KEYS = {
     "milk_submit_aktuba": ("aktuba", "ЖК «Актюба»"),
     "milk_submit_karamaly": ("karamaly", "Карамалы"),
     "milk_submit_sheremetyovo": ("sheremetyovo", "Шереметьево"),
-    "milk_submit_soyuz_agro": ("soyuz_agro", "ООО «Союз-Агро»"),
+    "milk_submit_biryuchevka": ("biryuchevka", "Бирючевка"),
 }
 
 
@@ -321,6 +326,37 @@ def calc_sales_totals(data: dict, prices: dict[str, float]) -> dict:
     return {"total_kg": total_kg, "total_l": total_l, "total_rub": total_rub, "avg_price": avg_price}
 
 
+def _calc_grade_totals(data: dict, prices: dict[str, float], grade_keys: list[str]) -> dict:
+    """Считает итоги реализации только для указанных контрагентов."""
+    field_map = {
+        "kantal": "sale_kantal_kg",
+        "chmk": "sale_chmk_kg",
+        "siyfat": "sale_siyfat_kg",
+        "tnurs": "sale_tnurs_kg",
+        "zai": "sale_zai_kg",
+        "cafeteria": "sale_cafeteria_l",
+        "salary": "sale_salary_l",
+    }
+    total_kg = 0.0
+    total_rub = 0.0
+    for key in grade_keys:
+        field = field_map.get(key, "")
+        raw = float(data.get(field, 0) or 0)
+        if key in ("cafeteria", "salary"):
+            kg = l_to_kg(raw)
+        else:
+            kg = raw
+        total_kg += kg
+        total_rub += kg * float(prices.get(key, 0.0))
+    total_l = kg_to_l(total_kg)
+    avg_price = (total_rub / total_kg) if total_kg > 0 else 0.0
+    return {"total_kg": total_kg, "total_l": total_l, "total_rub": total_rub, "avg_price": avg_price}
+
+
+GRADE1_KEYS = ["kantal", "chmk", "siyfat", "tnurs", "cafeteria", "salary"]
+GRADE2_KEYS = ["zai"]
+
+
 def build_report(location_title: str, data: dict, mode: str, prices: dict[str, float]) -> str:
     date_str = str(data.get("report_date") or datetime.now().strftime("%d.%m.%Y"))
 
@@ -338,7 +374,6 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
     prod_milking_kg = (gross_kg / milking_cows) if milking_cows > 0 else 0.0
     prod_milking_l = (gross_l / milking_cows) if milking_cows > 0 else 0.0
 
-    # Факт (в тексте оставляем для admin-режима)
     actual_gross_kg = float(data.get("actual_gross_kg", 0) or 0)
     actual_gross_l = kg_to_l(actual_gross_kg)
 
@@ -359,7 +394,6 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
             f"•  Малый — <b>{fmt_int(small_l)}</b> л / <b>{fmt_int(small_kg)}</b> кг\n"
         )
 
-    # Продуктивность — ОТДЕЛЬНЫМ БЛОКОМ
     prod_lines = ""
     if forage_cows > 0:
         prod_lines += f"• На 1 фуражную: <b>{fmt_float(prod_forage_l, 2)}</b> л/гол | <b>{fmt_float(prod_forage_kg, 2)}</b> кг/гол\n"
@@ -371,11 +405,9 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
     else:
         prod_lines += "• На 1 дойную: <b>нет данных</b>\n"
 
+    g1 = _calc_grade_totals(data, prices, GRADE1_KEYS)
+    g2 = _calc_grade_totals(data, prices, GRADE2_KEYS)
     sales = calc_sales_totals(data, prices)
-    total_sale_kg = sales["total_kg"]
-    total_sale_l = sales["total_l"]
-    total_sale_rub = sales["total_rub"]
-    avg_price = sales["avg_price"]
 
     milk_calves_total_kg = float(data.get("milk_calves_total_kg", 0) or 0)
     milk_calves_total_l = kg_to_l(milk_calves_total_kg)
@@ -403,10 +435,18 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
         f"🐄 <b>Продуктивность</b>\n"
         f"{prod_lines}\n"
 
-        f"🚚 <b>Реализация молока</b>\n"
-        f"• Всего: <b>{fmt_int(total_sale_kg)}</b> кг / <b>{fmt_int(total_sale_l)}</b> л\n"
-        f"• На сумму: <b>{fmt_int(total_sale_rub)}</b> руб\n"
-        f"• Средняя цена: <b>{fmt_float(avg_price, 2)}</b> руб/кг\n\n"
+        f"🚚 <b>Реализация — Высший сорт</b>\n"
+        f"• Кг: <b>{fmt_int(g1['total_kg'])}</b> | Л: <b>{fmt_int(g1['total_l'])}</b>\n"
+        f"• Сумма: <b>{fmt_int(g1['total_rub'])}</b> руб | Ср. цена: <b>{fmt_float(g1['avg_price'], 2)}</b> руб/кг\n\n"
+
+        f'🚚 <b>Реализация — 2 сорт (ООО «Зай»)</b>\n'
+        f"• Кг: <b>{fmt_int(g2['total_kg'])}</b> | Л: <b>{fmt_int(g2['total_l'])}</b>\n"
+        f"• Сумма: <b>{fmt_int(g2['total_rub'])}</b> руб | Ср. цена: <b>{fmt_float(g2['avg_price'], 2)}</b> руб/кг\n\n"
+
+        f"📦 <b>Реализация — ИТОГО</b>\n"
+        f"• Всего: <b>{fmt_int(sales['total_kg'])}</b> кг / <b>{fmt_int(sales['total_l'])}</b> л\n"
+        f"• На сумму: <b>{fmt_int(sales['total_rub'])}</b> руб\n"
+        f"• Средняя цена: <b>{fmt_float(sales['avg_price'], 2)}</b> руб/кг\n\n"
 
         f"🍼 <b>Выпойка и потери</b>\n"
         f"• Выпойка всего: <b>{fmt_int(milk_calves_total_l)}</b> л / <b>{fmt_int(milk_calves_total_kg)}</b> кг\n"
@@ -438,10 +478,54 @@ async def _send_text_and_pdf(chat, location_title: str, location_code: str, data
     await chat.answer_document(BufferedInputFile(pdf_b, filename=filename))
 
 
+@router.callback_query(F.data == "milk_soyuz_agro")
+async def view_soyuz_agro_milk(callback: types.CallbackQuery):
+    all_data: dict[str, dict] = {}
+    all_prices: dict[str, dict] = {}
+    missing = []
+
+    for col_title, code in SOYUZ_LOCATIONS:
+        row = await get_latest_milk_report(code)
+        if not row:
+            missing.append(col_title)
+            all_data[code] = {}
+        else:
+            all_data[code] = json.loads(row["data_json"])
+        all_prices[code] = await get_location_prices(code)
+
+    if len(missing) == len(SOYUZ_LOCATIONS):
+        await callback.message.answer(
+            "❗️ Нет данных ни по одному подразделению для формирования сводки Союз-Агро.",
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    if missing:
+        await callback.message.answer(
+            f"⚠️ Нет данных по: {', '.join(missing)}. Сводка будет неполной.",
+            parse_mode="HTML",
+        )
+
+    pdf_b = build_soyuz_agro_milk_pdf_bytes(all_data, all_prices, density=MILK_DENSITY)
+    any_date = ""
+    for code in ("aktuba", "karamaly", "sheremetyovo"):
+        d = all_data.get(code, {})
+        if d.get("report_date"):
+            any_date = str(d["report_date"])
+            break
+    filename = _make_pdf_filename("soyuz_agro", any_date or "", "public")
+    await callback.message.answer_document(BufferedInputFile(pdf_b, filename=filename))
+    await callback.answer()
+
+
 @router.callback_query(F.data.in_(list(VIEW_KEYS.keys())))
 async def view_milk_summary(callback: types.CallbackQuery):
     key = callback.data
     loc_code, loc_title = VIEW_KEYS[key]
+
+    if loc_code == "soyuz_agro":
+        return
 
     row = await get_latest_milk_report(loc_code)
     if not row:

@@ -15,6 +15,7 @@ FARMS = [
     ("ЖК «Актюба»", "aktuba"),
     ("Карамалы", "karamaly"),
     ("Шереметьево", "sheremetyovo"),
+    ("Бирючевка", "biryuchevka"),
 ]
 
 
@@ -57,14 +58,20 @@ def get_submit_keyboard() -> InlineKeyboardMarkup:
 
 
 # --- Клавиатура для выбора локации сдачи "Сводки по молоку" ---
-def get_milk_summary_submit_keyboard(include_soyuz_agro: bool = False) -> InlineKeyboardMarkup:
+def get_milk_summary_submit_keyboard(
+    include_soyuz_agro: bool = False,
+    allowed_location_codes: list[str] | None = None,
+) -> InlineKeyboardMarkup:
     options = [
         ("ЖК «Актюба»", "milk_submit_aktuba"),
         ("Карамалы", "milk_submit_karamaly"),
         ("Шереметьево", "milk_submit_sheremetyovo"),
+        ("Бирючевка", "milk_submit_biryuchevka"),
     ]
-    if include_soyuz_agro:
-        options.append(("🏢 ООО «Союз-Агро»", "milk_submit_soyuz_agro"))
+
+    if allowed_location_codes is not None:
+        allowed_cb = {f"milk_submit_{code}" for code in allowed_location_codes}
+        options = [(name, cb) for name, cb in options if cb in allowed_cb]
 
     kb = [[InlineKeyboardButton(text=name, callback_data=cb)] for name, cb in options]
     kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="milk_submit_back")])
@@ -87,10 +94,19 @@ def get_view_keyboard() -> InlineKeyboardMarkup:
 
 
 # --- Клавиатура выбора фермы для отчётов служб ---
-def get_farms_keyboard(action: str, dept_code: str) -> InlineKeyboardMarkup:
+def get_farms_keyboard(
+    action: str,
+    dept_code: str,
+    allowed_farm_codes: list[str] | None = None,
+) -> InlineKeyboardMarkup:
     """action: 'submit' или 'view'"""
+    farms = FARMS
+    if allowed_farm_codes is not None:
+        allowed = set(allowed_farm_codes)
+        farms = [(title, code) for title, code in FARMS if code in allowed]
+
     kb = [[InlineKeyboardButton(text=title, callback_data=f"farm_{action}_{dept_code}_{code}")]
-          for title, code in FARMS]
+          for title, code in farms]
     kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{action}_back_departments")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -140,14 +156,24 @@ def get_department_reports_keyboard(dept_code: str, submit: bool = True) -> Inli
 
 
 # --- Клавиатура для сводки по молоку (просмотр по локациям) ---
-def get_milk_summary_keyboard(include_soyuz_agro: bool = False) -> InlineKeyboardMarkup:
+def get_milk_summary_keyboard(
+    include_soyuz_agro: bool = False,
+    allowed_location_codes: list[str] | None = None,
+) -> InlineKeyboardMarkup:
     options = [
         ("ЖК «Актюба»", "milk_aktuba"),
         ("Карамалы", "milk_karamaly"),
         ("Шереметьево", "milk_sheremetyovo"),
+        ("Бирючевка", "milk_biryuchevka"),
     ]
     if include_soyuz_agro:
         options.append(("🏢 ООО «Союз-Агро»", "milk_soyuz_agro"))
+
+    if allowed_location_codes is not None:
+        allowed_cb = {f"milk_{code}" for code in allowed_location_codes}
+        if include_soyuz_agro:
+            allowed_cb.add("milk_soyuz_agro")
+        options = [(name, cb) for name, cb in options if cb in allowed_cb]
 
     kb = [[InlineKeyboardButton(text=name, callback_data=cb)] for name, cb in options]
     kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="milk_summary_back")])

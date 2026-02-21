@@ -2,6 +2,8 @@ from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
+from db import db
+from config import ADMIN_IDS
 from keyboards.reports_inline import (
     get_reports_menu,
     get_submit_keyboard,
@@ -15,6 +17,35 @@ from keyboards.reports_inline import (
 from keyboards import get_main_menu
 
 router = Router()
+
+ALL_FARM_CODES = ["aktuba", "karamaly", "sheremetyovo", "biryuchevka"]
+
+
+async def _report_access(user_id: int) -> dict:
+    """
+    Правила доступа по подразделениям:
+    - Отдел животноводства: все подразделения + Союз-Агро
+    - ЖК Актюба (и внутренние отделы ЖК): все, кроме Шереметьево и Союз-Агро
+    - Карамалы/Шереметьево/Бирючевка: только свое подразделение
+    """
+    if user_id in ADMIN_IDS:
+        return {"farm_codes": ALL_FARM_CODES, "include_soyuz_agro": True}
+
+    user = await db.get_user(user_id)
+    department = (user or {}).get("department") or ""
+    department = str(department).strip()
+
+    if department == "Отдел животноводства":
+        return {"farm_codes": ALL_FARM_CODES, "include_soyuz_agro": True}
+    if department == "Карамалы":
+        return {"farm_codes": ["karamaly"], "include_soyuz_agro": False}
+    if department == "Шереметьево":
+        return {"farm_codes": ["sheremetyovo"], "include_soyuz_agro": False}
+    if department == "Бирючевка":
+        return {"farm_codes": ["biryuchevka"], "include_soyuz_agro": False}
+
+    # По умолчанию считаем пользователя из блока ЖК
+    return {"farm_codes": ["aktuba", "karamaly", "biryuchevka"], "include_soyuz_agro": False}
 
 
 # =========================
@@ -111,10 +142,14 @@ async def show_view(callback: types.CallbackQuery, state: FSMContext):
 # =========================
 @router.callback_query(F.data == "milk_summary")
 async def milk_summary(callback: types.CallbackQuery, state: FSMContext):
+    access = await _report_access(callback.from_user.id)
     await _safe_edit_text(
         callback,
         "Выберите локацию сводки по молоку:",
-        reply_markup=get_milk_summary_keyboard(include_soyuz_agro=True),
+        reply_markup=get_milk_summary_keyboard(
+            include_soyuz_agro=bool(access["include_soyuz_agro"]),
+            allowed_location_codes=list(access["farm_codes"]),
+        ),
     )
     await callback.answer()
 
@@ -134,10 +169,13 @@ async def milk_back(callback: types.CallbackQuery, state: FSMContext):
 # =========================
 @router.callback_query(F.data == "milk_summary_submit")
 async def milk_summary_submit(callback: types.CallbackQuery, state: FSMContext):
+    access = await _report_access(callback.from_user.id)
     await _safe_edit_text(
         callback,
         "Выберите локацию для сдачи сводки по молоку:",
-        reply_markup=get_milk_summary_submit_keyboard(include_soyuz_agro=True),
+        reply_markup=get_milk_summary_submit_keyboard(
+            allowed_location_codes=list(access["farm_codes"]),
+        ),
     )
     await callback.answer()
 
@@ -167,12 +205,13 @@ async def soyuz_agro(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("submit_"))
 async def show_submit_department(callback: types.CallbackQuery, state: FSMContext):
     dept_code = callback.data.replace("submit_", "")
+    access = await _report_access(callback.from_user.id)
     # как в «Сводке по молоку»: сначала выбираем ферму, потом — конкретный отчёт
     await state.update_data(submit_dept=dept_code)
     await _safe_edit_text(
         callback,
         f"Выберите ферму для сдачи отчёта ({get_department_title(dept_code)}):",
-        reply_markup=get_farms_keyboard("submit", dept_code),
+        reply_markup=get_farms_keyboard("submit", dept_code, allowed_farm_codes=list(access["farm_codes"])),
     )
     await callback.answer()
 
@@ -183,12 +222,13 @@ async def show_submit_department(callback: types.CallbackQuery, state: FSMContex
 @router.callback_query(F.data.startswith("view_"))
 async def show_view_department(callback: types.CallbackQuery, state: FSMContext):
     dept_code = callback.data.replace("view_", "")
+    access = await _report_access(callback.from_user.id)
     # как в «Сводке по молоку»: сначала выбираем ферму, потом — конкретный отчёт
     await state.update_data(view_dept=dept_code)
     await _safe_edit_text(
         callback,
         f"Выберите ферму для просмотра отчётов ({get_department_title(dept_code)}):",
-        reply_markup=get_farms_keyboard("view", dept_code),
+        reply_markup=get_farms_keyboard("view", dept_code, allowed_farm_codes=list(access["farm_codes"])),
     )
     await callback.answer()
 
@@ -239,10 +279,11 @@ async def pick_farm_for_view(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("submit_back_farms_"))
 async def submit_back_farms(callback: types.CallbackQuery, state: FSMContext):
     dept_code = callback.data.replace("submit_back_farms_", "")
+    access = await _report_access(callback.from_user.id)
     await _safe_edit_text(
         callback,
         f"Выберите ферму для сдачи отчёта ({get_department_title(dept_code)}):",
-        reply_markup=get_farms_keyboard("submit", dept_code),
+        reply_markup=get_farms_keyboard("submit", dept_code, allowed_farm_codes=list(access["farm_codes"])),
     )
     await callback.answer()
 
@@ -250,10 +291,11 @@ async def submit_back_farms(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("view_back_farms_"))
 async def view_back_farms(callback: types.CallbackQuery, state: FSMContext):
     dept_code = callback.data.replace("view_back_farms_", "")
+    access = await _report_access(callback.from_user.id)
     await _safe_edit_text(
         callback,
         f"Выберите ферму для просмотра отчётов ({get_department_title(dept_code)}):",
-        reply_markup=get_farms_keyboard("view", dept_code),
+        reply_markup=get_farms_keyboard("view", dept_code, allowed_farm_codes=list(access["farm_codes"])),
     )
     await callback.answer()
 

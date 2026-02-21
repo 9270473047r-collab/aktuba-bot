@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from utils.pdf_common import add_title, new_pdf, section, table, pdf_bytes
 from db import MILK_PRICE_DEFAULTS
 
 
 MILK_DENSITY_DEFAULT = 1.03  # кг/л
+
+GRADE1_ORDER = [
+    "ООО «Канталь»",
+    "ООО «ЧМК»",
+    "ООО «Сыйфатлы Ит»",
+    "ООО «ТН-УРС»",
+    "Столовая",
+    "В счёт ЗП",
+]
+GRADE2_ORDER = [
+    "ООО «Зай»",
+]
+
+SOYUZ_LOCATIONS: List[Tuple[str, str]] = [
+    ("ЖК", "aktuba"),
+    ("Карамалы", "karamaly"),
+    ("Шереметьево", "sheremetyovo"),
+]
 
 
 def _to_float(x: Any) -> float:
@@ -56,14 +74,12 @@ def _sales_lines(
 ) -> Dict[str, Dict[str, float]]:
     sales: Dict[str, Dict[str, float]] = {}
 
-    # контрагенты (ввод кг)
     kantal_kg = _to_float(data.get("sale_kantal_kg"))
     chmk_kg = _to_float(data.get("sale_chmk_kg"))
     siyfat_kg = _to_float(data.get("sale_siyfat_kg"))
     tnurs_kg = _to_float(data.get("sale_tnurs_kg"))
     zai_kg = _to_float(data.get("sale_zai_kg"))
 
-    # исключения (ввод л)
     cafeteria_l = _to_float(data.get("sale_cafeteria_l"))
     salary_l = _to_float(data.get("sale_salary_l"))
     cafeteria_kg = l_to_kg(cafeteria_l, density)
@@ -112,6 +128,42 @@ def _sales_totals(sales: Dict[str, Dict[str, float]]) -> Dict[str, float]:
         "total_rub": float(total_rub),
         "avg_price": float(avg_price),
     }
+
+
+def _grade_totals(
+    sales: Dict[str, Dict[str, float]],
+    names: List[str],
+) -> Dict[str, float]:
+    filtered = {k: v for k, v in sales.items() if k in names}
+    return _sales_totals(filtered)
+
+
+def _render_sales_grade(pdf, font, theme, title: str, sales, order):
+    section(pdf, font, theme, title)
+    headers = ["Канал", "Кг", "Л", "Цена, руб/кг", "Сумма, руб", "Примечание"]
+    widths = [54, 22, 22, 26, 30, 32]
+    aligns = ["L", "R", "R", "R", "R", "L"]
+    rows = []
+    for name in order:
+        v = sales.get(name, {})
+        rows.append([
+            name,
+            fmt_int(v.get("kg", 0.0)),
+            fmt_int(v.get("l", 0.0)),
+            fmt_float(v.get("price", 0.0), 2),
+            fmt_int(v.get("rub", 0.0)),
+            str(v.get("note", "") or ""),
+        ])
+    gtot = _grade_totals(sales, order)
+    rows.append([
+        "Итого",
+        fmt_int(gtot["total_kg"]),
+        fmt_int(gtot["total_l"]),
+        fmt_float(gtot["avg_price"], 2),
+        fmt_int(gtot["total_rub"]),
+        "",
+    ])
+    table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
 
 
 def build_milk_summary_pdf_bytes(
@@ -178,39 +230,18 @@ def build_milk_summary_pdf_bytes(
         rows.append(["На 1 дойную корову", "нет данных", "", ""])
     table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
 
-    # ── Реализация
+    # ── Реализация — Высший сорт
     sales = _sales_lines(data, density, prices=prices)
+    _render_sales_grade(pdf, font, theme, "Реализация молока — Высший сорт", sales, GRADE1_ORDER)
+
+    # ── Реализация — 2 сорт (ООО «Зай»)
+    _render_sales_grade(pdf, font, theme, 'Реализация молока — 2 сорт (ООО "Зай")', sales, GRADE2_ORDER)
+
+    # ── Реализация — общие итоги
     totals = _sales_totals(sales)
-
-    section(pdf, font, theme, "Реализация молока (детализация)")
-    headers = ["Канал", "Кг", "Л", "Цена, руб/кг", "Сумма, руб", "Примечание"]
-    widths = [54, 22, 22, 26, 30, 32]  # = 186
-    aligns = ["L", "R", "R", "R", "R", "L"]
-    order = [
-        "ООО «Канталь»",
-        "ООО «ЧМК»",
-        "ООО «Сыйфатлы Ит»",
-        "ООО «ТН-УРС»",
-        "ООО «Зай»",
-        "Столовая",
-        "В счёт ЗП",
-    ]
-    rows = []
-    for name in order:
-        v = sales.get(name, {})
-        rows.append([
-            name,
-            fmt_int(v.get("kg", 0.0)),
-            fmt_int(v.get("l", 0.0)),
-            fmt_float(v.get("price", 0.0), 2),
-            fmt_int(v.get("rub", 0.0)),
-            str(v.get("note", "") or ""),
-        ])
-    table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
-
-    section(pdf, font, theme, "Реализация молока (итоги)")
+    section(pdf, font, theme, "Реализация молока (общие итоги)")
     headers = ["Показатель", "Кг", "Л", "Сумма, руб", "Средняя цена, руб/кг"]
-    widths = [62, 26, 26, 34, 38]  # = 186
+    widths = [62, 26, 26, 34, 38]
     aligns = ["L", "R", "R", "R", "R"]
     rows = [[
         "Всего",
@@ -266,5 +297,207 @@ def build_milk_summary_pdf_bytes(
         ["Малый танк", fmt_int(tank_small_l), fmt_int(tank_small_kg)],
     ]
     table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
+
+    return pdf_bytes(pdf)
+
+
+# ─────────────────────────────────────────────────────────────
+# Союз-Агро: сводный PDF (колонки: ЖК | Карамалы | Шереметьево | Итого)
+# ─────────────────────────────────────────────────────────────
+
+def _loc_data(
+    all_data: Dict[str, Dict[str, Any]],
+    all_prices: Dict[str, Dict[str, float]],
+    density: float,
+) -> List[Tuple[str, str, Dict, Dict, Dict]]:
+    """Возвращает [(col_title, code, data, sales, totals), ...] для каждой локации."""
+    result = []
+    for col_title, code in SOYUZ_LOCATIONS:
+        d = all_data.get(code, {})
+        p = all_prices.get(code)
+        s = _sales_lines(d, density, prices=p)
+        t = _sales_totals(s)
+        result.append((col_title, code, d, s, t))
+    return result
+
+
+def build_soyuz_agro_milk_pdf_bytes(
+    all_data: Dict[str, Dict[str, Any]],
+    all_prices: Dict[str, Dict[str, float]],
+    density: float = MILK_DENSITY_DEFAULT,
+) -> bytes:
+    """
+    all_data:   {"aktuba": {...}, "karamaly": {...}, "sheremetyovo": {...}}
+    all_prices: {"aktuba": {...}, "karamaly": {...}, "sheremetyovo": {...}}
+    """
+    pdf, font, theme = new_pdf("L")
+
+    any_date = ""
+    for code in ("aktuba", "karamaly", "sheremetyovo"):
+        d = all_data.get(code, {})
+        if d.get("report_date"):
+            any_date = str(d["report_date"])
+            break
+    if not any_date:
+        any_date = datetime.now().strftime("%d.%m.%Y")
+
+    subtitle = f"Дата: {any_date} | Сформировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+    add_title(pdf, font, theme, "ООО «Союз-Агро» — Сводка по молоку", subtitle)
+
+    locs = _loc_data(all_data, all_prices, density)
+    col_headers = ["Показатель"] + [t for t, *_ in locs] + ["Итого"]
+    n_cols = len(col_headers)
+    first_w = 52
+    data_w = (270 - first_w) / (n_cols - 1)
+    widths = [first_w] + [data_w] * (n_cols - 1)
+    aligns = ["L"] + ["R"] * (n_cols - 1)
+
+    # ── Молоко
+    section(pdf, font, theme, "Молоко")
+    rows_milk = []
+    for label, field in [("Валовый надой, кг", "gross_kg"), ("Валовый надой, л", "gross_l")]:
+        vals = []
+        total = 0.0
+        for _, code, d, _, _ in locs:
+            big = _to_float(d.get("big_dz_kg"))
+            small = _to_float(d.get("small_dz_kg"))
+            gross_kg = big + small
+            if field == "gross_l":
+                v = kg_to_l(gross_kg, density)
+            else:
+                v = gross_kg
+            vals.append(v)
+            total += v
+        rows_milk.append([label] + [fmt_int(v) for v in vals] + [fmt_int(total)])
+    table(pdf, font, theme, headers=col_headers, rows=rows_milk, widths=widths, aligns=aligns)
+
+    # ── Продуктивность
+    section(pdf, font, theme, "Продуктивность")
+    rows_prod = []
+    for label, num_field, den_field in [
+        ("На 1 фуражную, кг/гол", "gross_kg", "forage_cows"),
+        ("На 1 дойную, кг/гол", "gross_kg", "milking_cows"),
+    ]:
+        vals = []
+        total_num = 0.0
+        total_den = 0
+        for _, code, d, _, _ in locs:
+            gross = _to_float(d.get("big_dz_kg")) + _to_float(d.get("small_dz_kg"))
+            den = _to_int(d.get(den_field))
+            v = (gross / den) if den > 0 else 0.0
+            vals.append(v)
+            total_num += gross
+            total_den += den
+        total_v = (total_num / total_den) if total_den > 0 else 0.0
+        rows_prod.append([label] + [fmt_float(v, 2) for v in vals] + [fmt_float(total_v, 2)])
+
+    for label, den_field in [("Фуражные коровы, гол", "forage_cows"), ("Дойные коровы, гол", "milking_cows")]:
+        vals = []
+        total = 0
+        for _, code, d, _, _ in locs:
+            v = _to_int(d.get(den_field))
+            vals.append(v)
+            total += v
+        rows_prod.append([label] + [fmt_int(v) for v in vals] + [fmt_int(total)])
+
+    table(pdf, font, theme, headers=col_headers, rows=rows_prod, widths=widths, aligns=aligns)
+
+    # ── Реализация — Высший сорт
+    section(pdf, font, theme, "Реализация молока — Высший сорт")
+    rows_g1 = []
+    for cname in GRADE1_ORDER:
+        row_vals = []
+        total_kg = 0.0
+        for _, code, d, s, _ in locs:
+            v = s.get(cname, {}).get("kg", 0.0)
+            row_vals.append(v)
+            total_kg += v
+        rows_g1.append([cname] + [fmt_int(v) for v in row_vals] + [fmt_int(total_kg)])
+    g1_totals_per_loc = []
+    g1_grand = 0.0
+    for _, code, d, s, _ in locs:
+        t = _grade_totals(s, GRADE1_ORDER)
+        g1_totals_per_loc.append(t["total_kg"])
+        g1_grand += t["total_kg"]
+    rows_g1.append(["Итого В/С"] + [fmt_int(v) for v in g1_totals_per_loc] + [fmt_int(g1_grand)])
+    table(pdf, font, theme, headers=col_headers, rows=rows_g1, widths=widths, aligns=aligns)
+
+    # ── Реализация — 2 сорт
+    section(pdf, font, theme, 'Реализация молока — 2 сорт (ООО "Зай")')
+    rows_g2 = []
+    for cname in GRADE2_ORDER:
+        row_vals = []
+        total_kg = 0.0
+        for _, code, d, s, _ in locs:
+            v = s.get(cname, {}).get("kg", 0.0)
+            row_vals.append(v)
+            total_kg += v
+        rows_g2.append([cname] + [fmt_int(v) for v in row_vals] + [fmt_int(total_kg)])
+    table(pdf, font, theme, headers=col_headers, rows=rows_g2, widths=widths, aligns=aligns)
+
+    # ── Реализация — общие итоги
+    section(pdf, font, theme, "Реализация молока (общие итоги)")
+    total_per_loc_kg = []
+    total_per_loc_rub = []
+    grand_kg = 0.0
+    grand_rub = 0.0
+    for _, code, d, s, t in locs:
+        total_per_loc_kg.append(t["total_kg"])
+        total_per_loc_rub.append(t["total_rub"])
+        grand_kg += t["total_kg"]
+        grand_rub += t["total_rub"]
+    grand_avg = (grand_rub / grand_kg) if grand_kg > 0 else 0.0
+    rows_total = [
+        ["Всего, кг"] + [fmt_int(v) for v in total_per_loc_kg] + [fmt_int(grand_kg)],
+        ["Всего, руб"] + [fmt_int(v) for v in total_per_loc_rub] + [fmt_int(grand_rub)],
+        ["Средняя цена"] + [
+            fmt_float((total_per_loc_rub[i] / total_per_loc_kg[i]) if total_per_loc_kg[i] > 0 else 0.0, 2)
+            for i in range(len(locs))
+        ] + [fmt_float(grand_avg, 2)],
+    ]
+    table(pdf, font, theme, headers=col_headers, rows=rows_total, widths=widths, aligns=aligns)
+
+    # ── Выпойка и потери
+    section(pdf, font, theme, "Выпойка и потери")
+    rows_wp = []
+    for label, field in [("Выпойка всего, кг", "milk_calves_total_kg"), ("Утилизация, кг", "disposal_kg")]:
+        vals = []
+        total = 0.0
+        for _, code, d, _, _ in locs:
+            v = _to_float(d.get(field))
+            vals.append(v)
+            total += v
+        rows_wp.append([label] + [fmt_int(v) for v in vals] + [fmt_int(total)])
+    table(pdf, font, theme, headers=col_headers, rows=rows_wp, widths=widths, aligns=aligns)
+
+    # ── Качество
+    section(pdf, font, theme, "Качество")
+    rows_q = []
+    for label, field in [("Жир, %", "fat"), ("Белок, %", "protein")]:
+        vals = []
+        total_val = 0.0
+        cnt = 0
+        for _, code, d, _, _ in locs:
+            v = _to_float(d.get(field))
+            vals.append(v)
+            if v > 0:
+                total_val += v
+                cnt += 1
+        avg_val = (total_val / cnt) if cnt > 0 else 0.0
+        rows_q.append([label] + [fmt_float(v, 2) for v in vals] + [fmt_float(avg_val, 2)])
+    table(pdf, font, theme, headers=col_headers, rows=rows_q, widths=widths, aligns=aligns)
+
+    # ── Остатки
+    section(pdf, font, theme, "Остаток (конец суток)")
+    rows_tank = []
+    for label, field in [("Большой танк, кг", "tank_big_kg"), ("Малый танк, кг", "tank_small_kg")]:
+        vals = []
+        total = 0.0
+        for _, code, d, _, _ in locs:
+            v = _to_float(d.get(field))
+            vals.append(v)
+            total += v
+        rows_tank.append([label] + [fmt_int(v) for v in vals] + [fmt_int(total)])
+    table(pdf, font, theme, headers=col_headers, rows=rows_tank, widths=widths, aligns=aligns)
 
     return pdf_bytes(pdf)

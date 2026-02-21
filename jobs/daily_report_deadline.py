@@ -24,8 +24,12 @@ from aiogram.types import BufferedInputFile
 from db import db
 
 # Молоко (PDF)
-from handlers.milk_summary import get_milk_report_by_date
-from utils.pdf_milk_summary_pdf import build_milk_summary_pdf_bytes
+from handlers.milk_summary import get_milk_report_by_date, get_location_prices
+from utils.pdf_milk_summary_pdf import (
+    build_milk_summary_pdf_bytes,
+    build_soyuz_agro_milk_pdf_bytes,
+    SOYUZ_LOCATIONS,
+)
 
 # Вет (PDF)
 from utils.pdf_vet_0_3_reports import build_vet_0_3_daily_pdf_bytes
@@ -56,6 +60,7 @@ FARMS: List[Tuple[str, str]] = [
     ("ЖК «Актюба»", "aktuba"),
     ("Карамалы", "karamaly"),
     ("Шереметьево", "sheremetyovo"),
+    ("Бирючевка", "biryuchevka"),
 ]
 
 
@@ -150,9 +155,25 @@ async def _pdf_milk(location_title: str, location_code: str, report_date_iso: st
     if not row:
         return None
     data = json.loads(row["data_json"])
-    # всем пользователям отправляем "public" (без закрытых полей)
     prices = await db.get_milk_prices(location_code)
     return build_milk_summary_pdf_bytes(location_title, data, mode="public", density=1.03, prices=prices)
+
+
+async def _pdf_soyuz_agro_milk(report_date_iso: str) -> Optional[bytes]:
+    all_data: Dict[str, Dict] = {}
+    all_prices: Dict[str, Dict] = {}
+    has_any = False
+    for _, code in SOYUZ_LOCATIONS:
+        row = await get_milk_report_by_date(code, report_date_iso)
+        if row:
+            all_data[code] = json.loads(row["data_json"])
+            has_any = True
+        else:
+            all_data[code] = {}
+        all_prices[code] = await db.get_milk_prices(code)
+    if not has_any:
+        return None
+    return build_soyuz_agro_milk_pdf_bytes(all_data, all_prices, density=1.03)
 
 
 async def _pdf_vet_0_3(location_title: str, report_date_iso: str) -> Optional[bytes]:
@@ -280,6 +301,14 @@ async def build_daily_pdf_parts(report_date_iso: str) -> List[Tuple[str, bytes]]
                 parts.append((f"vet_ortho_{farm_code}", b))
         except Exception:
             logger.exception("vet ortho pdf build failed")
+
+    # Союз-Агро сводная по молоку
+    try:
+        b = await _pdf_soyuz_agro_milk(report_date_iso)
+        if b:
+            parts.append(("milk_soyuz_agro", b))
+    except Exception:
+        logger.exception("soyuz-agro milk pdf build failed")
 
     # Стадо и МТП (только Актюба)
     try:
