@@ -12,6 +12,7 @@ from admin_keyboards import (
 )
 from config import ADMIN_IDS
 from db import db
+from tasks.all_tasks_pdf import get_all_tasks_pdf_bytes
 from utils.cleaner import auto_clean_chat
 from utils.pdf_common import new_pdf, add_title, section, table, pdf_bytes
 
@@ -114,6 +115,21 @@ async def back_to_admin_menu(message: types.Message, state: FSMContext):
         reply_markup=get_admin_menu()
     )
     await state.update_data(last_bot_message_id=sent.message_id)
+
+
+# ─────────── «📋 Список задач по отделам/блокам» (красивый PDF) ────────────────
+@router.message(F.text == "📋 Список задач по отделам/блокам")
+@auto_clean_chat()
+async def admin_all_tasks_pdf(message: types.Message, state: FSMContext):
+    if not user_is_admin(message.from_user.id):
+        await message.answer("⛔ Доступ запрещён!")
+        return
+    pdf_b, caption = await get_all_tasks_pdf_bytes()
+    await message.answer_document(
+        BufferedInputFile(pdf_b, filename=f"zadachi_po_otdelam_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"),
+        caption=caption,
+        reply_markup=get_admin_menu(),
+    )
 
 
 @router.message(F.text == "🥛 Изменить цены на молоко")
