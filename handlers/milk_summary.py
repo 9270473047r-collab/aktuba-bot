@@ -311,6 +311,14 @@ LOCATION_STEPS = {
 FACT_STEP = ("actual_gross_kg", "Фактический валовый надой, <b>кг</b>:", parse_number, "виден только админу и 5183512024")
 
 
+def _get_steps(location_code: str, include_fact: bool = False) -> list:
+    base = LOCATION_STEPS.get(location_code, STEPS_BASE)
+    steps = list(base)
+    if include_fact:
+        steps.append(FACT_STEP)
+    return steps
+
+
 async def get_location_prices(location_code: str) -> dict[str, float]:
     try:
         return await db.get_milk_prices(location_code)
@@ -323,15 +331,22 @@ async def ask_step(message: types.Message, state: FSMContext):
     step_idx = data.get("step_idx", 0)
     loc_title = data.get("location_title", "ЖК")
     loc_code = data.get("location_code", "aktuba")
-    steps = data.get("steps") or STEPS_BASE
+    include_fact = data.get("include_fact", False)
+    steps = _get_steps(loc_code, include_fact)
+
+    if step_idx >= len(steps):
+        return
 
     key, q, _, hint = steps[step_idx]
-    if key in FIELD_TO_COUNTERPARTY:
-        cp_code = FIELD_TO_COUNTERPARTY[key]
-        prices = await get_location_prices(loc_code)
-        price = float(prices.get(cp_code, 0.0))
-        cp_title = COUNTERPARTY_LABELS.get(cp_code, cp_code)
-        hint = f"текущая цена {cp_title}: {fmt_float(price, 2)} руб/кг"
+    try:
+        if key in FIELD_TO_COUNTERPARTY:
+            cp_code = FIELD_TO_COUNTERPARTY[key]
+            prices = await get_location_prices(loc_code)
+            price = float(prices.get(cp_code, 0.0))
+            cp_title = COUNTERPARTY_LABELS.get(cp_code, cp_code)
+            hint = f"текущая цена {cp_title}: {fmt_float(price, 2)} руб/кг"
+    except Exception:
+        pass
     progress = f"Шаг <b>{step_idx + 1}</b> из <b>{len(steps)}</b>"
 
     await message.answer(
@@ -718,25 +733,26 @@ async def start_submit_milk(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.answer("⛔️ Сводку по молоку по ЖК «Актюба» сдаёт только лаборант.")
         return
 
-    base = LOCATION_STEPS.get(loc_code, STEPS_BASE)
-    steps = list(base)
-
+    include_fact = False
     if loc_code == "aktuba":
         include_fact = (callback.from_user.id == LAB_TECH_ID or await can_view_fact(callback.from_user.id))
-        if include_fact:
-            steps.append(FACT_STEP)
 
+    await state.clear()
     await state.set_state(MilkWizard.active)
     await state.update_data(
         location_code=loc_code,
         location_title=loc_title,
         step_idx=0,
-        steps=steps,
-        answers={}
+        include_fact=include_fact,
+        answers={},
     )
 
+    steps = _get_steps(loc_code, include_fact)
+    total = len(steps)
+
     await callback.message.answer(
-        f"✅ Начинаем сдачу сводки по молоку: <b>{loc_title}</b>\n\n"
+        f"✅ Начинаем сдачу сводки по молоку: <b>{loc_title}</b>\n"
+        f"Всего шагов: <b>{total}</b>\n\n"
         f"Формат ввода:\n"
         f"• все значения — <b>кг</b>\n"
         f"• исключения: <b>столовая</b> и <b>в счёт ЗП</b> — <b>литры</b>\n"
@@ -759,10 +775,17 @@ async def milk_wizard_input(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
     step_idx = int(data.get("step_idx", 0))
-    steps = data.get("steps") or STEPS_BASE
-    answers = data.get("answers", {})
-    loc_code = data.get("location_code")
+    loc_code = data.get("location_code", "aktuba")
     loc_title = data.get("location_title", "ЖК")
+    include_fact = data.get("include_fact", False)
+    answers = data.get("answers", {})
+
+    steps = _get_steps(loc_code, include_fact)
+
+    if step_idx >= len(steps):
+        await state.clear()
+        await message.answer("❗️ Ошибка: шаги закончились. Начните заново.")
+        return
 
     key, _, parser, _ = steps[step_idx]
 
@@ -770,7 +793,6 @@ async def milk_wizard_input(message: types.Message, state: FSMContext):
         value = parser(txt)
     except Exception as e:
         await message.answer(f"❗️ Ошибка ввода: {e}\nПопробуйте ещё раз.")
-        await ask_step(message, state)
         return
 
     answers[key] = value
@@ -782,16 +804,25 @@ async def milk_wizard_input(message: types.Message, state: FSMContext):
 
         report_date_iso = iso_from_ddmmyyyy(str(answers["report_date"]))
 
-        await upsert_milk_report(
-            location=loc_code,
-            report_date=report_date_iso,
-            data_json=json.dumps(answers, ensure_ascii=False),
-            created_by=message.from_user.id
-        )
+        try:
+            await upsert_milk_report(
+                location=loc_code,
+                report_date=report_date_iso,
+                data_json=json.dumps(answers, ensure_ascii=False),
+                created_by=message.from_user.id,
+            )
+        except Exception as e:
+            await state.clear()
+            await message.answer(f"❗️ Ошибка сохранения: {e}")
+            return
 
         await state.clear()
         await message.answer("✅ <b>Сводка сохранена.</b>", parse_mode="HTML")
-        await _send_text_and_pdf(message, loc_title, loc_code, answers, mode="public")
+
+        try:
+            await _send_text_and_pdf(message, loc_title, loc_code, answers, mode="public")
+        except Exception as e:
+            await message.answer(f"⚠️ Сводка сохранена, но PDF не сформирован: {e}")
         return
 
     await state.update_data(step_idx=step_idx, answers=answers)
