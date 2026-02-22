@@ -3,6 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile
 
 from db import db
+from keyboards import get_main_menu
 from utils.cleaner import auto_clean_chat
 from utils.pdf_org_structure import build_org_pdf
 
@@ -20,4 +21,5 @@ async def org_view(message: types.Message, state: FSMContext):
     await message.answer_document(
         BufferedInputFile(pdf_b, filename="org_structure.pdf"),
         caption="📋 Оргструктура — ООО «Союз-Агро»",
+        reply_markup=get_main_menu(message.from_user.id),
     )
