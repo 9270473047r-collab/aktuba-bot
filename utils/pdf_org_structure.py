@@ -21,11 +21,11 @@ ZHK_DEPARTMENTS = [
 ]
 
 OTDEL_POSITIONS = [
-    "Начальник отдела",
-    "Главный технолог",
-    "Главный ветеринарный врач",
-    "Главный инженер",
-    "Ведущий специалист по учету",
+    ("Начальник отдела", "Салихов Ринат Аскатович"),
+    ("Главный технолог", None),
+    ("Главный ветеринарный врач", None),
+    ("Главный инженер", None),
+    ("Ведущий специалист по учету", None),
 ]
 
 SUBDIVISIONS = ["Карамалы", "Шереметьево", "Бирючевка"]
@@ -62,14 +62,18 @@ def build_org_pdf(users: List[Dict[str, Any]]) -> bytes:
     headers = ["Должность", "Сотрудник"]
     rows = []
     colors = []
-    for pos in OTDEL_POSITIONS:
-        staff = assigned.get(("Отдел животноводства", "Ключевые должности отдела", pos), [])
-        if staff:
-            fio_text = "\n".join(staff)
+    for pos, fixed_fio in OTDEL_POSITIONS:
+        if fixed_fio:
+            fio_text = fixed_fio
             row_c = [None, FILLED_COLOR]
         else:
-            fio_text = "Свободно"
-            row_c = [None, VACANT_COLOR]
+            staff = assigned.get(("Отдел животноводства", "Ключевые должности отдела", pos), [])
+            if staff:
+                fio_text = "\n".join(staff)
+                row_c = [None, FILLED_COLOR]
+            else:
+                fio_text = "Свободно"
+                row_c = [None, VACANT_COLOR]
         rows.append([pos, fio_text])
         colors.append(row_c)
     table(pdf, font, theme, headers=headers, rows=rows,
