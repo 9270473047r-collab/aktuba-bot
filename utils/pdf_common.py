@@ -503,6 +503,7 @@ def _table_impl(
     theme: Optional[Dict[str, Any]] = None,
     header_fill: bool = True,
     cell_colors: Optional[List[List[Any]]] = None,
+    data_font_size: int = 9,
 ):
     if not headers:
         return
@@ -556,7 +557,7 @@ def _table_impl(
     pdf.set_y(y0 + head_h)
     pdf.set_text_color(*t["text"])
 
-    set_font(pdf, bold=False, size=9)
+    set_font(pdf, bold=False, size=data_font_size)
 
     for r_i, r in enumerate(rows or []):
         r = list(r) + [""] * (n - len(r))
@@ -639,6 +640,7 @@ def table(pdf: FPDF, *args, **kwargs):
     aligns = kwargs.get("aligns") or kwargs.get("align") or kwargs.get("alignments")
     header_fill = kwargs.get("header_fill", True)
     cell_colors = kwargs.get("cell_colors")
+    data_font_size = kwargs.get("data_font_size", 9)
 
     return _table_impl(
         pdf,
@@ -649,6 +651,7 @@ def table(pdf: FPDF, *args, **kwargs):
         theme=theme,
         header_fill=header_fill,
         cell_colors=cell_colors,
+        data_font_size=data_font_size,
     )
 
 

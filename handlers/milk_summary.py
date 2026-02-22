@@ -633,17 +633,9 @@ async def _show_soyuz_agro(message: types.Message, date_iso: str | None):
         except Exception:
             prev_all_data = {}
 
-    report_status = None
-    if actual_date_iso:
-        try:
-            report_status = await _build_report_status(actual_date_iso)
-        except Exception:
-            pass
-
     pdf_b = build_soyuz_agro_milk_pdf_bytes(
         all_data, all_prices, density=MILK_DENSITY,
         prev_all_data=prev_all_data or None,
-        report_status=report_status,
     )
     any_date = actual_date_iso or ""
     for code in ("aktuba", "karamaly", "sheremetyovo"):

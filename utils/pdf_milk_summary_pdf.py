@@ -71,24 +71,26 @@ def kg_to_l(kg: float, density: float) -> float:
     return float(kg) / d
 
 
-def _delta(cur: float, prev: float, fmt=fmt_int) -> Tuple[str, Optional[Tuple]]:
+def _delta(cur: float, prev: float, fmt=fmt_int, multiline: bool = False) -> Tuple[str, Optional[Tuple]]:
     delta = cur - prev
     text = fmt(cur)
     if abs(delta) < 0.5:
         return text, COLOR_BLACK
     sign = "+" if delta > 0 else ""
-    text = f"{fmt(cur)} ({sign}{fmt(delta)})"
+    sep = "\n" if multiline else " "
+    text = f"{fmt(cur)}{sep}({sign}{fmt(delta)})"
     color = COLOR_GREEN if delta > 0 else COLOR_RED
     return text, color
 
 
-def _delta_float(cur: float, prev: float, digits: int = 2) -> Tuple[str, Optional[Tuple]]:
+def _delta_float(cur: float, prev: float, digits: int = 2, multiline: bool = False) -> Tuple[str, Optional[Tuple]]:
     delta = cur - prev
     text = fmt_float(cur, digits)
     if abs(delta) < 0.005:
         return text, COLOR_BLACK
     sign = "+" if delta > 0 else ""
-    text = f"{fmt_float(cur, digits)} ({sign}{fmt_float(delta, digits)})"
+    sep = "\n" if multiline else " "
+    text = f"{fmt_float(cur, digits)}{sep}({sign}{fmt_float(delta, digits)})"
     color = COLOR_GREEN if delta > 0 else COLOR_RED
     return text, color
 
@@ -154,7 +156,8 @@ def _grade_totals(sales: Dict[str, Dict[str, float]], names: List[str]) -> Dict[
 
 
 def _render_sales_grade(pdf, font, theme, title, sales, order,
-                        prev_sales=None):
+                        prev_sales=None, location_code: str = "aktuba"):
+    show_delta = location_code not in LOCATIONS_NO_DZ
     section(pdf, font, theme, title)
     headers = ["Канал", "Кг", "Л", "Цена", "Сумма", "Прим."]
     widths = [54, 22, 22, 26, 30, 32]
@@ -164,18 +167,30 @@ def _render_sales_grade(pdf, font, theme, title, sales, order,
     for name in order:
         v = sales.get(name, {})
         pv = (prev_sales or {}).get(name, {})
-        kg_t, kg_c = _delta(v.get("kg", 0.0), pv.get("kg", 0.0))
-        l_t, l_c = _delta(v.get("l", 0.0), pv.get("l", 0.0))
-        pr_t, pr_c = _delta_float(v.get("price", 0.0), pv.get("price", 0.0))
-        rub_t, rub_c = _delta(v.get("rub", 0.0), pv.get("rub", 0.0))
+        if show_delta and prev_sales:
+            kg_t, kg_c = _delta(v.get("kg", 0.0), pv.get("kg", 0.0))
+            l_t, l_c = _delta(v.get("l", 0.0), pv.get("l", 0.0))
+            pr_t, pr_c = _delta_float(v.get("price", 0.0), pv.get("price", 0.0))
+            rub_t, rub_c = _delta(v.get("rub", 0.0), pv.get("rub", 0.0))
+        else:
+            kg_t, kg_c = fmt_int(v.get("kg", 0.0)), None
+            l_t, l_c = fmt_int(v.get("l", 0.0)), None
+            pr_t, pr_c = fmt_float(v.get("price", 0.0), 2), None
+            rub_t, rub_c = fmt_int(v.get("rub", 0.0)), None
         rows.append([name, kg_t, l_t, pr_t, rub_t, str(v.get("note", "") or "")])
         colors.append([None, kg_c, l_c, pr_c, rub_c, None])
     gtot = _grade_totals(sales, order)
     pgtot = _grade_totals(prev_sales or {}, order) if prev_sales else {"total_kg": 0, "total_l": 0, "avg_price": 0, "total_rub": 0}
-    tk_t, tk_c = _delta(gtot["total_kg"], pgtot["total_kg"])
-    tl_t, tl_c = _delta(gtot["total_l"], pgtot["total_l"])
-    ta_t, ta_c = _delta_float(gtot["avg_price"], pgtot["avg_price"])
-    tr_t, tr_c = _delta(gtot["total_rub"], pgtot["total_rub"])
+    if show_delta and prev_sales:
+        tk_t, tk_c = _delta(gtot["total_kg"], pgtot["total_kg"])
+        tl_t, tl_c = _delta(gtot["total_l"], pgtot["total_l"])
+        ta_t, ta_c = _delta_float(gtot["avg_price"], pgtot["avg_price"])
+        tr_t, tr_c = _delta(gtot["total_rub"], pgtot["total_rub"])
+    else:
+        tk_t, tk_c = fmt_int(gtot["total_kg"]), None
+        tl_t, tl_c = fmt_int(gtot["total_l"]), None
+        ta_t, ta_c = fmt_float(gtot["avg_price"], 2), None
+        tr_t, tr_c = fmt_int(gtot["total_rub"]), None
     rows.append(["Итого", tk_t, tl_t, ta_t, tr_t, ""])
     colors.append([None, tk_c, tl_c, ta_c, tr_c, None])
     table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns,
@@ -266,9 +281,11 @@ def build_milk_summary_pdf_bytes(
     sales = _sales_lines(data, density, prices=prices)
     prev_sales = _sales_lines(prev, density, prices=prices) if has_prev else None
     _render_sales_grade(pdf, font, theme, "Реализация молока — Высший сорт",
-                        sales, GRADE1_ORDER, prev_sales=prev_sales)
+                        sales, GRADE1_ORDER, prev_sales=prev_sales,
+                        location_code=location_code)
     _render_sales_grade(pdf, font, theme, 'Реализация молока — 2 сорт (ООО "Зай")',
-                        sales, GRADE2_ORDER, prev_sales=prev_sales)
+                        sales, GRADE2_ORDER, prev_sales=prev_sales,
+                        location_code=location_code)
 
     totals = _sales_totals(sales)
     section(pdf, font, theme, "Реализация молока (общие итоги)")
@@ -277,10 +294,10 @@ def build_milk_summary_pdf_bytes(
     aligns = ["L", "R", "R", "R", "R"]
     if has_prev:
         ptot = _sales_totals(_sales_lines(prev, density, prices=prices))
-        tk_t, tk_c = _delta(totals["total_kg"], ptot["total_kg"])
-        tl_t, tl_c = _delta(totals["total_l"], ptot["total_l"])
-        tr_t, tr_c = _delta(totals["total_rub"], ptot["total_rub"])
-        ta_t, ta_c = _delta_float(totals["avg_price"], ptot["avg_price"])
+        tk_t, tk_c = _delta(totals["total_kg"], ptot["total_kg"], multiline=True)
+        tl_t, tl_c = _delta(totals["total_l"], ptot["total_l"], multiline=True)
+        tr_t, tr_c = _delta(totals["total_rub"], ptot["total_rub"], multiline=True)
+        ta_t, ta_c = _delta_float(totals["avg_price"], ptot["avg_price"], multiline=True)
         rows = [["Всего", tk_t, tl_t, tr_t, ta_t]]
         colors = [[None, tk_c, tl_c, tr_c, ta_c]]
     else:
@@ -358,7 +375,7 @@ def build_soyuz_agro_milk_pdf_bytes(
     all_prices: Dict[str, Dict[str, float]],
     density: float = MILK_DENSITY_DEFAULT,
     prev_all_data: Dict[str, Dict[str, Any]] | None = None,
-    report_status: Dict[str, Dict[str, bool]] | None = None,
+    **_kwargs: Any,
 ) -> bytes:
     pdf, font, theme = new_pdf("P")
 
@@ -384,26 +401,7 @@ def build_soyuz_agro_milk_pdf_bytes(
     widths = [first_w] + [data_w] * (n_cols - 1)
     aligns = ["L"] + ["R"] * (n_cols - 1)
 
-    # ── Статус сдачи отчётов
-    if report_status:
-        section(pdf, font, theme, "Статус сдачи отчётов")
-        st_headers = ["Подразделение", "Молоко", "Вет 0-3", "Вет коровы", "Вет орто"]
-        st_widths = [50, 34, 34, 34, 34]
-        st_aligns = ["L", "C", "C", "C", "C"]
-        st_rows = []
-        st_colors = []
-        for title, code in SOYUZ_LOCATIONS:
-            st = report_status.get(code, {})
-            row = [title]
-            row_c = [None]
-            for key in ("milk", "vet_0_3", "vet_cows", "vet_ortho"):
-                ok = st.get(key, False)
-                row.append("OK" if ok else "НЕ СДАНО")
-                row_c.append(COLOR_GREEN if ok else COLOR_RED)
-            st_rows.append(row)
-            st_colors.append(row_c)
-        table(pdf, font, theme, headers=st_headers, rows=st_rows, widths=st_widths,
-              aligns=st_aligns, cell_colors=st_colors)
+    SMALL = 7
 
     # ── Молоко
     section(pdf, font, theme, "Молоко")
@@ -435,7 +433,7 @@ def build_soyuz_agro_milk_pdf_bytes(
         rows_milk.append(row)
         colors_milk.append(row_c)
     table(pdf, font, theme, headers=col_headers, rows=rows_milk, widths=widths, aligns=aligns,
-          cell_colors=colors_milk)
+          cell_colors=colors_milk, data_font_size=SMALL)
 
     # ── Продуктивность
     section(pdf, font, theme, "Продуктивность")
@@ -465,7 +463,8 @@ def build_soyuz_agro_milk_pdf_bytes(
             vals.append(v)
             total += v
         rows_prod.append([label] + [fmt_int(v) for v in vals] + [fmt_int(total)])
-    table(pdf, font, theme, headers=col_headers, rows=rows_prod, widths=widths, aligns=aligns)
+    table(pdf, font, theme, headers=col_headers, rows=rows_prod, widths=widths, aligns=aligns,
+          data_font_size=SMALL)
 
     # ── Реализация — Высший сорт
     section(pdf, font, theme, "Реализация молока — Высший сорт")
@@ -514,7 +513,7 @@ def build_soyuz_agro_milk_pdf_bytes(
     rows_g1.append(row)
     colors_g1.append(row_c)
     table(pdf, font, theme, headers=col_headers, rows=rows_g1, widths=widths, aligns=aligns,
-          cell_colors=colors_g1)
+          cell_colors=colors_g1, data_font_size=SMALL)
 
     # ── Реализация — 2 сорт
     section(pdf, font, theme, 'Реализация молока — 2 сорт (ООО "Зай")')
@@ -542,7 +541,7 @@ def build_soyuz_agro_milk_pdf_bytes(
         rows_g2.append(row)
         colors_g2.append(row_c)
     table(pdf, font, theme, headers=col_headers, rows=rows_g2, widths=widths, aligns=aligns,
-          cell_colors=colors_g2)
+          cell_colors=colors_g2, data_font_size=SMALL)
 
     # ── Реализация — общие итоги
     section(pdf, font, theme, "Реализация молока (общие итоги)")
@@ -601,7 +600,7 @@ def build_soyuz_agro_milk_pdf_bytes(
     rows_total.append(row)
     colors_total.append(row_c)
     table(pdf, font, theme, headers=col_headers, rows=rows_total, widths=widths, aligns=aligns,
-          cell_colors=colors_total)
+          cell_colors=colors_total, data_font_size=SMALL)
 
     # ── Выпойка и потери
     section(pdf, font, theme, "Выпойка и потери")
@@ -614,7 +613,8 @@ def build_soyuz_agro_milk_pdf_bytes(
             vals.append(v)
             total += v
         rows_wp.append([label] + [fmt_int(v) for v in vals] + [fmt_int(total)])
-    table(pdf, font, theme, headers=col_headers, rows=rows_wp, widths=widths, aligns=aligns)
+    table(pdf, font, theme, headers=col_headers, rows=rows_wp, widths=widths, aligns=aligns,
+          data_font_size=SMALL)
 
     # ── Качество
     section(pdf, font, theme, "Качество")
@@ -631,6 +631,7 @@ def build_soyuz_agro_milk_pdf_bytes(
                 cnt += 1
         avg_val = (total_val / cnt) if cnt > 0 else 0.0
         rows_q.append([label] + [fmt_float(v, 2) for v in vals] + [fmt_float(avg_val, 2)])
-    table(pdf, font, theme, headers=col_headers, rows=rows_q, widths=widths, aligns=aligns)
+    table(pdf, font, theme, headers=col_headers, rows=rows_q, widths=widths, aligns=aligns,
+          data_font_size=SMALL)
 
     return pdf_bytes(pdf)
