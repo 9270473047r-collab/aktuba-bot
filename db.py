@@ -326,6 +326,19 @@ class Database:
             logger.error("❌ Ошибка удаления пользователя:\n%s", traceback.format_exc())
             return False
 
+    async def update_role_by_full_name(self, full_name: str, new_role: str) -> bool:
+        """Обновить роль пользователя по ФИО. Возвращает True, если обновлена хотя бы одна строка."""
+        try:
+            cur = await self.conn.execute(
+                "UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE full_name = ?",
+                (new_role.strip(), full_name.strip()),
+            )
+            await self.conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            logger.error("❌ Ошибка обновления роли:\n%s", traceback.format_exc())
+            return False
+
     async def upsert_user(
         self,
         user_id: int,

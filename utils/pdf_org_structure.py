@@ -44,16 +44,8 @@ def _build_assigned(users: List[Dict[str, Any]]) -> Dict[Tuple, List[str]]:
 
 
 def _find_staff(assigned: dict, dept: str, block: str, pos: str) -> List[str]:
-    exact = assigned.get((dept, block, pos), [])
-    if exact:
-        return exact
-    pos_base = pos.split(" (")[0].strip()
-    for (d, b, r), fios in assigned.items():
-        if d == dept and b == block:
-            r_base = r.split(" (")[0].strip()
-            if r_base == pos_base and r != pos:
-                return fios
-    return []
+    """Только точное совпадение (department, block, role). Учетчик (№1) и (№2) — разные должности."""
+    return assigned.get((dept, block, pos), [])
 
 
 def _users_by_dept(users: List[Dict[str, Any]], department: str) -> List[Dict[str, Any]]:
