@@ -171,7 +171,8 @@ async def _pdf_milk(location_title: str, location_code: str, report_date_iso: st
     except Exception:
         pass
     return build_milk_summary_pdf_bytes(location_title, data, mode="public", density=1.03,
-                                        prices=prices, prev_data=prev_data)
+                                        prices=prices, prev_data=prev_data,
+                                        location_code=location_code)
 
 
 async def _pdf_soyuz_agro_milk(report_date_iso: str) -> Optional[bytes]:

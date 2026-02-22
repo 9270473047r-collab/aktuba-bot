@@ -186,6 +186,9 @@ def _render_sales_grade(pdf, font, theme, title, sales, order,
 # Индивидуальный PDF по подразделению
 # ─────────────────────────────────────────────────────────────
 
+LOCATIONS_NO_DZ = {"karamaly", "sheremetyovo"}
+
+
 def build_milk_summary_pdf_bytes(
     location_title: str,
     data: Dict[str, Any],
@@ -193,6 +196,7 @@ def build_milk_summary_pdf_bytes(
     density: float = MILK_DENSITY_DEFAULT,
     prices: Dict[str, float] | None = None,
     prev_data: Dict[str, Any] | None = None,
+    location_code: str = "aktuba",
 ) -> bytes:
     pdf, font, theme = new_pdf("P")
 
@@ -225,7 +229,7 @@ def build_milk_summary_pdf_bytes(
         rows = [["Валовый надой", fmt_int(gross_l), fmt_int(gross_kg)]]
         colors = None
 
-    if mode != "group":
+    if mode != "group" and location_code not in LOCATIONS_NO_DZ:
         big_l = kg_to_l(big_kg, density)
         small_l = kg_to_l(small_kg, density)
         rows += [
@@ -311,20 +315,21 @@ def build_milk_summary_pdf_bytes(
     rows = [["Жир, %", fmt_float(fat, 2)], ["Белок, %", fmt_float(protein, 2)]]
     table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
 
-    tank_big_kg = _to_float(data.get("tank_big_kg"))
-    tank_small_kg = _to_float(data.get("tank_small_kg"))
-    tank_big_l = kg_to_l(tank_big_kg, density)
-    tank_small_l = kg_to_l(tank_small_kg, density)
+    if location_code not in LOCATIONS_NO_DZ:
+        tank_big_kg = _to_float(data.get("tank_big_kg"))
+        tank_small_kg = _to_float(data.get("tank_small_kg"))
+        tank_big_l = kg_to_l(tank_big_kg, density)
+        tank_small_l = kg_to_l(tank_small_kg, density)
 
-    section(pdf, font, theme, "Остаток (конец суток)")
-    headers = ["Танк", "Л", "Кг"]
-    widths = [90, 48, 48]
-    aligns = ["L", "R", "R"]
-    rows = [
-        ["Большой танк", fmt_int(tank_big_l), fmt_int(tank_big_kg)],
-        ["Малый танк", fmt_int(tank_small_l), fmt_int(tank_small_kg)],
-    ]
-    table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
+        section(pdf, font, theme, "Остаток (конец суток)")
+        headers = ["Танк", "Л", "Кг"]
+        widths = [90, 48, 48]
+        aligns = ["L", "R", "R"]
+        rows = [
+            ["Большой танк", fmt_int(tank_big_l), fmt_int(tank_big_kg)],
+            ["Малый танк", fmt_int(tank_small_l), fmt_int(tank_small_kg)],
+        ]
+        table(pdf, font, theme, headers=headers, rows=rows, widths=widths, aligns=aligns)
 
     return pdf_bytes(pdf)
 

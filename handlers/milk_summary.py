@@ -420,7 +420,11 @@ GRADE1_KEYS = ["kantal", "chmk", "siyfat", "tnurs", "cafeteria", "salary"]
 GRADE2_KEYS = ["zai"]
 
 
-def build_report(location_title: str, data: dict, mode: str, prices: dict[str, float]) -> str:
+LOCATIONS_NO_DZ = {"karamaly", "sheremetyovo"}
+
+
+def build_report(location_title: str, data: dict, mode: str, prices: dict[str, float],
+                 location_code: str = "aktuba") -> str:
     date_str = str(data.get("report_date") or datetime.now().strftime("%d.%m.%Y"))
 
     big_kg = float(data.get("big_dz_kg", 0) or 0)
@@ -448,7 +452,7 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
             fact_block = "• Факт валовый надой: <b>нет данных</b>\n"
 
     dz_block = ""
-    if mode != "group":
+    if mode != "group" and location_code not in LOCATIONS_NO_DZ:
         big_l = kg_to_l(big_kg)
         small_l = kg_to_l(small_kg)
         dz_block = (
@@ -518,10 +522,15 @@ def build_report(location_title: str, data: dict, mode: str, prices: dict[str, f
         f"🧪 <b>Качество</b>\n"
         f"• Жир — <b>{fmt_float(fat, 2)}</b> % | Белок — <b>{fmt_float(protein, 2)}</b> %\n\n"
 
-        f"🛢 <b>Остаток (конец суток)</b>\n"
-        f"• Большой танк — <b>{fmt_int(tank_big_l)}</b> л / <b>{fmt_int(tank_big_kg)}</b> кг\n"
-        f"• Малый танк — <b>{fmt_int(tank_small_l)}</b> л / <b>{fmt_int(tank_small_kg)}</b> кг\n"
     )
+
+    if location_code not in LOCATIONS_NO_DZ:
+        text += (
+            f"🛢 <b>Остаток (конец суток)</b>\n"
+            f"• Большой танк — <b>{fmt_int(tank_big_l)}</b> л / <b>{fmt_int(tank_big_kg)}</b> кг\n"
+            f"• Малый танк — <b>{fmt_int(tank_small_l)}</b> л / <b>{fmt_int(tank_small_kg)}</b> кг\n"
+        )
+
     return text
 
 
@@ -547,7 +556,7 @@ async def _get_prev_day_data(location_code: str, report_date_iso: str | None) ->
 
 async def _send_text_and_pdf(chat, location_title: str, location_code: str, data: dict, mode: str):
     prices = await get_location_prices(location_code)
-    text = build_report(location_title, data, mode=mode, prices=prices)
+    text = build_report(location_title, data, mode=mode, prices=prices, location_code=location_code)
     await chat.answer(text, parse_mode="HTML")
 
     report_date = str(data.get("report_date") or "")
@@ -559,7 +568,8 @@ async def _send_text_and_pdf(chat, location_title: str, location_code: str, data
 
     prev_data = await _get_prev_day_data(location_code, report_date_iso)
     pdf_b = build_milk_summary_pdf_bytes(location_title, data, mode=mode, density=MILK_DENSITY,
-                                         prices=prices, prev_data=prev_data)
+                                         prices=prices, prev_data=prev_data,
+                                         location_code=location_code)
     filename = _make_pdf_filename(location_code, report_date, mode)
     await chat.answer_document(BufferedInputFile(pdf_b, filename=filename))
 
@@ -845,9 +855,10 @@ async def send_daily_group_milk_summary(bot):
     data = json.loads(row["data_json"])
 
     prices = await get_location_prices("aktuba")
-    text = build_report("ЖК «Актюба»", data, mode="group", prices=prices)
+    text = build_report("ЖК «Актюба»", data, mode="group", prices=prices, location_code="aktuba")
     await bot.send_message(GROUP_CHAT_ID, text, parse_mode="HTML")
 
-    pdf_b = build_milk_summary_pdf_bytes("ЖК «Актюба»", data, mode="group", density=MILK_DENSITY, prices=prices)
+    pdf_b = build_milk_summary_pdf_bytes("ЖК «Актюба»", data, mode="group", density=MILK_DENSITY,
+                                         prices=prices, location_code="aktuba")
     filename = _make_pdf_filename("aktuba", str(data.get("report_date") or ""), "group")
     await bot.send_document(GROUP_CHAT_ID, document=BufferedInputFile(pdf_b, filename=filename))
