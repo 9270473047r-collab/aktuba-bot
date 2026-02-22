@@ -3,8 +3,9 @@
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import ADMIN_IDS                         # ← только отсюда!
+from config import ADMIN_IDS
 from keyboards import get_back_keyboard
 from admin_keyboards import get_admin_menu, get_user_management_keyboard
 from db import db
@@ -20,9 +21,6 @@ class AddUserFSM(StatesGroup):
     waiting_for_user_id  = State()
     waiting_for_fullname = State()
     waiting_for_role     = State()
-
-class DeleteUserFSM(StatesGroup):
-    waiting_for_user_id  = State()
 
 class ChangeRoleFSM(StatesGroup):
     waiting_for_user_id  = State()
@@ -134,22 +132,75 @@ async def add_user_finish(message: types.Message, state: FSMContext):
 async def del_user_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
-    await message.answer("Введите Telegram-ID пользователя для удаления:",
-                         reply_markup=get_back_keyboard())
-    await state.set_state(DeleteUserFSM.waiting_for_user_id)
+    rows = await db.execute_query(
+        "SELECT user_id, full_name, role, department FROM users ORDER BY department, full_name"
+    )
+    if not rows:
+        return await message.answer("В базе нет пользователей.",
+                                    reply_markup=get_user_management_keyboard())
+    buttons = []
+    for r in rows:
+        uid = r.get("user_id")
+        fio = (r.get("full_name") or "—").strip()
+        role = (r.get("role") or "").strip()
+        dept = (r.get("department") or "").strip()
+        label = f"{fio} — {role}"
+        if dept:
+            label += f" ({dept})"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"delusr_ask:{uid}",
+        )])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="delusr_cancel")])
+    await message.answer(
+        "Выберите пользователя для удаления:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
-@router.message(DeleteUserFSM.waiting_for_user_id)
-async def del_user_finish(message: types.Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await state.clear()
-        return await open_user_management(message)
-    if not message.text.isdigit():
-        return await message.answer("ID должен быть числом.")
-    uid = int(message.text)
-    rows = await db.execute_query("DELETE FROM users WHERE user_id = ?", (uid,))
-    await message.answer("✅ Пользователь удалён." if rows else "Пользователь не найден.",
-                         reply_markup=get_user_management_keyboard())
-    await state.clear()
+
+@router.callback_query(F.data.startswith("delusr_ask:"))
+async def del_user_confirm(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Нет доступа", show_alert=True)
+    uid = int(callback.data.split(":")[1])
+    row = await db.execute_query(
+        "SELECT full_name, role FROM users WHERE user_id = ?", (uid,)
+    )
+    if not row:
+        await callback.message.edit_text("Пользователь не найден.")
+        return await callback.answer()
+    fio = row[0].get("full_name", "—")
+    role = row[0].get("role", "")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"delusr_yes:{uid}"),
+            InlineKeyboardButton(text="❌ Нет", callback_data="delusr_cancel"),
+        ]
+    ])
+    await callback.message.edit_text(
+        f"Удалить пользователя?\n\n<b>{fio}</b>\n{role}\nID: {uid}",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delusr_yes:"))
+async def del_user_execute(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Нет доступа", show_alert=True)
+    uid = int(callback.data.split(":")[1])
+    await db.delete_user(uid)
+    await callback.message.edit_text(f"✅ Пользователь (ID {uid}) удалён.")
+    await callback.answer("Удалён")
+
+
+@router.callback_query(F.data == "delusr_cancel")
+async def del_user_cancel(callback: types.CallbackQuery):
+    await callback.message.edit_text("Удаление отменено.")
+    await callback.answer()
 
 
 # ───────────────────────── «🔄 Изменить роль» ───────────────────────────────
